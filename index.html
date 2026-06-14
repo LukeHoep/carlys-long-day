@@ -915,9 +915,6 @@ function draw() {
   if (state === ST.GAMEOVER) { drawGameOver(); return; }
   if (state === ST.WIN)      { drawWin();      return; }
 
-  // World (camera offset)
-  ctx.save();
-  ctx.translate(-Math.round(camera), 0);
   drawBackground();
   drawGround();
   drawPlatforms();
@@ -926,7 +923,6 @@ function draw() {
   drawEnemies();
   drawProjectiles();
   drawPlayer();
-  ctx.restore();
 
   drawHUD();
 
