@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Carly's Long Day</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; }
+  canvas { display: block; image-rendering: pixelated; border: 3px solid #444; }
+  #info { color: #555; font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="450"></canvas>
+<div id="info">WASD / Arrows to move &nbsp;|&nbsp; SPACE or W to jump &nbsp;|&nbsp; Jump on Mean Ladies to defeat them</div>
+<script>
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const W = 800, H = 450;
+const GRAVITY = 0.55;
+const GROUND_Y = 370;
+const PLAYER_SPD = 3.8;
+const JUMP_V = -13;
+const CHASE_RANGE = 220;
+const INSULT_DMG = 10;
+const TOUCH_DMG = 18;
+const HEALTH_MAX = 100;
+
+const DAYS = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
+
+const INSULTS = [
+  "I'VE BEEN WAITING!",
+  "I KNOW THE OWNER!",
+  "SNAP SNAP!",
+  "DO YOU KNOW WHO I AM?",
+  "EXCUSE ME?!",
+  "GET ME YOUR MANAGER!",
+  "THIS IS UNACCEPTABLE!",
+  "I'M A REGULAR!",
+  "WHERE'S MY DRINK?!",
+  "IS THIS YOUR FIRST DAY?!",
+  "I'LL LEAVE A BAD REVIEW!",
+  "SPEAK TO YOUR SUPERIOR!",
+  "THE CUSTOMER IS ALWAYS RIGHT!",
+  "I WANT A DISCOUNT!",
+  "CAN I SPEAK TO SOMEONE ELSE?",
+  "THIS IS EMBARRASSING FOR YOU.",
+  "MY HUSBAND IS A LAWYER.",
+];
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+const ST = { TITLE:0, INTRO:1, PLAY:2, COMPLETE:3, GAMEOVER:4, WIN:5 };
+let state, day, lives, score, dayScore;
+let player, enemies, collectibles, platforms, bgObjects, tessa;
+let levelW, camera;
+let introTimer, completeTimer;
+let jumpPressed = false;
+
+// ─── CANVAS ───────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// ─── INPUT ────────────────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => {
+  if (!keys[e.code]) {
+    keys[e.code] = true;
+    onKeyDown(e.code);
+  }
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function onKeyDown(code) {
+  const jump = code === 'Space' || code === 'KeyW' || code === 'ArrowUp';
+  if (state === ST.TITLE && (code === 'Space' || code === 'Enter')) { startGame(); return; }
+  if (state === ST.PLAY && jump && player.onGround) { player.vy = JUMP_V; player.onGround = false; }
+  if (state === ST.COMPLETE && code === 'Space') { advanceDay(); return; }
+  if (state === ST.GAMEOVER && code === 'Space') { state = ST.TITLE; return; }
+  if (state === ST.WIN && code === 'Space') { state = ST.TITLE; return; }
+}
+
+// ─── LEVEL GENERATION ─────────────────────────────────────────────────────────
+function rand(a, b) { return a + Math.random() * (b - a); }
+function randInt(a, b) { return Math.floor(rand(a, b)); }
+function pick(arr) { return arr[randInt(0, arr.length)]; }
+
+function buildingColor() {
+  return pick(['#2a2a4a','#3a2a3a','#1e3a2a','#3a3020','#2a1e3a','#1a2a3a','#3a2010']);
+}
+
+function generateWindows(bw, bh) {
+  const wins = [];
+  for (let wy = 12; wy < bh - 20; wy += 24) {
+    for (let wx = 8; wx < bw - 8; wx += 18) {
+      if (Math.random() < 0.55) wins.push({ wx, wy, lit: Math.random() < 0.65 });
+    }
+  }
+  return wins;
+}
+
+function generateLevel(d) {
+  levelW = 3200 + d * 600;
+  camera = 0;
+  platforms = [];
+  enemies = [];
+  collectibles = [];
+  bgObjects = [];
+
+  // Background buildings + streetlights
+  let bx = 0;
+  while (bx < levelW) {
+    if (Math.random() < 0.25) {
+      bgObjects.push({ type: 'light', x: bx });
+      bx += randInt(100, 180);
+    } else {
+      const bw = randInt(70, 140), bh = randInt(100, 220);
+      bgObjects.push({ type: 'building', x: bx, w: bw, h: bh, color: buildingColor(), wins: generateWindows(bw, bh) });
+      bx += bw + randInt(10, 40);
+    }
+  }
+
+  // Platforms: benches, dumpsters, awnings, crates, fire hydrants
+  const platDefs = [
+    { w:80,  h:14, elev:14,  color:'#6B4423', label:'bench'   },
+    { w:96,  h:44, elev:44,  color:'#2a5a2a', label:'dumpster'},
+    { w:130, h:10, elev:100, color:'#882200', label:'awning'  },
+    { w:48,  h:44, elev:44,  color:'#8a7040', label:'crate'   },
+    { w:22,  h:34, elev:34,  color:'#cc2222', label:'hydrant' },
+  ];
+  const numPlat = 6 + d * 2;
+  let px = 500;
+  for (let i = 0; i < numPlat; i++) {
+    const def = pick(platDefs);
+    px += randInt(120, 280);
+    platforms.push({ x: px, y: GROUND_Y - def.elev, w: def.w, h: def.h, color: def.color, label: def.label });
+    px += def.w;
+  }
+
+  // Enemies
+  const numEnemies = 2 + Math.floor(d * 1.5);
+  const speed = 1.0 + d * 0.22;
+  for (let i = 0; i < numEnemies; i++) {
+    const ex = 700 + (i / numEnemies) * (levelW - 900);
+    enemies.push(mkEnemy(ex, speed));
+  }
+
+  // Collectibles: wine on ground & platforms, reeses scattered
+  const numWine = 10 + d * 3;
+  const numReeses = 3 + d;
+  for (let i = 0; i < numWine; i++) {
+    const cx = 300 + Math.random() * (levelW - 500);
+    const plat = platforms.find(p => cx >= p.x + 4 && cx <= p.x + p.w - 4);
+    const cy = plat ? plat.y - 20 : GROUND_Y - 20;
+    collectibles.push({ x: cx, y: cy, type: 'wine', collected: false });
+  }
+  for (let i = 0; i < numReeses; i++) {
+    const cx = 400 + Math.random() * (levelW - 600);
+    const plat = platforms.find(p => cx >= p.x + 4 && cx <= p.x + p.w - 4);
+    const cy = plat ? plat.y - 18 : GROUND_Y - 18;
+    collectibles.push({ x: cx, y: cy, type: 'reeses', collected: false });
+  }
+
+  // Tessa at the end
+  tessa = { x: levelW - 160, y: GROUND_Y - 52, w: 28, h: 52 };
+}
+
+function mkEnemy(x, speed) {
+  return {
+    x, y: GROUND_Y - 48, w: 24, h: 48,
+    speed, vx: speed,
+    patrolL: x - 90, patrolR: x + 90,
+    mode: 'patrol',
+    insult: null, insultTimer: 0, insultCooldown: randInt(60, 120),
+    stomped: false, stompTimer: 0,
+    animF: 0, animT: 0, facingR: true,
+    hairColor: pick(['#FFD700','#FF8C00','#CC0000','#FFFFFF','#CC44CC']),
+    outfitColor: pick(['#FF1493','#FF6600','#9900CC','#00AACC','#FF4444']),
+  };
+}
+
+function mkPlayer() {
+  return {
+    x: 80, y: GROUND_Y - 48, w: 24, h: 48,
+    vx: 0, vy: 0,
+    onGround: false,
+    health: HEALTH_MAX,
+    invFrames: 0,
+    facingR: true,
+    animF: 0, animT: 0,
+  };
+}
+
+// ─── GAME FLOW ────────────────────────────────────────────────────────────────
+function startGame() {
+  lives = 3; score = 0; day = 0;
+  beginDay();
+}
+
+function beginDay() {
+  dayScore = 0;
+  player = mkPlayer();
+  generateLevel(day);
+  state = ST.INTRO;
+  introTimer = 150;
+}
+
+function restartDay() {
+  player = mkPlayer();
+  generateLevel(day);
+  state = ST.INTRO;
+  introTimer = 100;
+}
+
+function advanceDay() {
+  score += dayScore;
+  day++;
+  if (day >= 7) { state = ST.WIN; } else { beginDay(); }
+}
+
+// ─── COLLISION ────────────────────────────────────────────────────────────────
+function overlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ─── UPDATE ───────────────────────────────────────────────────────────────────
+function update() {
+  if (state === ST.INTRO) {
+    if (--introTimer <= 0) state = ST.PLAY;
+    return;
+  }
+  if (state === ST.COMPLETE) {
+    if (--completeTimer <= 0) advanceDay();
+    return;
+  }
+  if (state !== ST.PLAY) return;
+
+  updatePlayer();
+  updateEnemies();
+  updateCollectibles();
+  updateCamera();
+  checkTessa();
+}
+
+function updatePlayer() {
+  const p = player;
+
+  if (keys['KeyA'] || keys['ArrowLeft'])  { p.vx = -PLAYER_SPD; p.facingR = false; }
+  else if (keys['KeyD'] || keys['ArrowRight']) { p.vx = PLAYER_SPD; p.facingR = true; }
+  else p.vx *= 0.7;
+
+  p.vy += GRAVITY;
+  p.x += p.vx;
+  p.y += p.vy;
+  if (p.x < 0) p.x = 0;
+  if (p.x + p.w > levelW) p.x = levelW - p.w;
+
+  // Ground
+  p.onGround = false;
+  if (p.y + p.h >= GROUND_Y) { p.y = GROUND_Y - p.h; p.vy = 0; p.onGround = true; }
+
+  // Platforms
+  for (const pl of platforms) {
+    if (!overlap(p, pl)) continue;
+    const prevBottom = p.y + p.h - p.vy;
+    const prevRight  = p.x + p.w - p.vx;
+    const prevLeft   = p.x - p.vx;
+    if (p.vy >= 0 && prevBottom <= pl.y + 4) {
+      p.y = pl.y - p.h; p.vy = 0; p.onGround = true;
+    } else if (p.vy < 0 && p.y - p.vy >= pl.y + pl.h - 4) {
+      p.y = pl.y + pl.h; p.vy = 0;
+    } else if (prevRight <= pl.x + 6) {
+      p.x = pl.x - p.w;
+    } else if (prevLeft >= pl.x + pl.w - 6) {
+      p.x = pl.x + pl.w;
+    }
+  }
+
+  if (p.invFrames > 0) p.invFrames--;
+
+  // Animate
+  if (++p.animT > 7) { p.animT = 0; p.animF = (p.animF + 1) % 2; }
+}
+
+function updateEnemies() {
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+
+    if (e.stomped) {
+      if (--e.stompTimer <= 0) { score += 100; dayScore += 100; enemies.splice(i, 1); }
+      continue;
+    }
+
+    // Patrol / chase
+    const dx = (player.x + player.w/2) - (e.x + e.w/2);
+    const dist = Math.abs(dx);
+    if (dist < CHASE_RANGE) e.mode = 'chase';
+    else if (dist > CHASE_RANGE + 150) e.mode = 'patrol';
+
+    if (e.mode === 'chase') {
+      const dir = dx > 0 ? 1 : -1;
+      e.x += e.speed * 1.6 * dir;
+      e.facingR = dir > 0;
+    } else {
+      e.x += e.vx;
+      e.facingR = e.vx > 0;
+      if (e.x < e.patrolL || e.x > e.patrolR) e.vx *= -1;
+    }
+
+    if (e.y + e.h > GROUND_Y) e.y = GROUND_Y - e.h;
+
+    // Insults
+    if (e.mode === 'chase') {
+      if (--e.insultCooldown <= 0) {
+        e.insult = pick(INSULTS);
+        e.insultTimer = 130;
+        e.insultCooldown = randInt(140, 220);
+        takeDamage(INSULT_DMG);
+      }
+    }
+    if (e.insultTimer > 0) { if (--e.insultTimer === 0) e.insult = null; }
+
+    // Stomp / side hit
+    if (overlap(player, e)) {
+      const prevBottom = player.y + player.h - player.vy;
+      if (player.vy > 0 && prevBottom <= e.y + 10) {
+        e.stomped = true; e.stompTimer = 28;
+        player.vy = -9;
+        score += 50; dayScore += 50;
+      } else {
+        takeDamage(TOUCH_DMG);
+      }
+    }
+
+    // Animate
+    if (++e.animT > 7) { e.animT = 0; e.animF = (e.animF + 1) % 2; }
+  }
+}
+
+function takeDamage(amt) {
+  if (player.invFrames > 0) return;
+  player.health -= amt;
+  player.invFrames = 80;
+  if (player.health <= 0) {
+    player.health = 0;
+    lives--;
+    if (lives <= 0) { lives = 0; state = ST.GAMEOVER; }
+    else { restartDay(); }
+  }
+}
+
+function updateCollectibles() {
+  for (const c of collectibles) {
+    if (c.collected) continue;
+    if (overlap(player, { x: c.x - 6, y: c.y - 6, w: 28, h: 32 })) {
+      c.collected = true;
+      if (c.type === 'wine') {
+        const pts = 10;
+        score += pts; dayScore += pts;
+      } else {
+        player.health = Math.min(HEALTH_MAX, player.health + 30);
+      }
+    }
+  }
+}
+
+function updateCamera() {
+  const target = player.x - W / 3;
+  camera = Math.max(0, Math.min(target, levelW - W));
+}
+
+function checkTessa() {
+  if (overlap(player, tessa)) {
+    state = ST.COMPLETE;
+    completeTimer = 210;
+  }
+}
+
+// ─── DRAW HELPERS ─────────────────────────────────────────────────────────────
+function pixelRect(x, y, w, h, col) {
+  ctx.fillStyle = col;
+  ctx.fillRect(Math.round(x), Math.round(y), w, h);
+}
+
+function drawText(text, x, y, size, col, align='center') {
+  ctx.font = `bold ${size}px monospace`;
+  ctx.fillStyle = col;
+  ctx.textAlign = align;
+  ctx.fillText(text, Math.round(x), Math.round(y));
+}
+
+// ─── DRAW BACKGROUND ─────────────────────────────────────────────────────────
+function drawBackground() {
+  // Sky
+  const g = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  g.addColorStop(0, '#090918');
+  g.addColorStop(1, '#1a0e2e');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, GROUND_Y);
+
+  // Stars (fixed seed based on day)
+  ctx.fillStyle = '#ffffff';
+  for (let i = 0; i < 60; i++) {
+    const sx = ((i * 173 + day * 37) % levelW) - camera;
+    const sy = (i * 59 + day * 13) % 160;
+    if (sx >= 0 && sx <= W) ctx.fillRect(sx | 0, sy | 0, 2, 2);
+  }
+
+  // Moon
+  const moonX = (levelW * 0.1 - camera + W * 0.7) % (W * 1.5) - W * 0.25;
+  ctx.fillStyle = '#FFFACD';
+  ctx.beginPath();
+  ctx.arc(moonX, 55, 22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#1a0e2e';
+  ctx.beginPath();
+  ctx.arc(moonX + 8, 50, 18, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Buildings + streetlights
+  for (const obj of bgObjects) {
+    const sx = obj.x - camera;
+    if (sx + (obj.w || 20) < 0 || sx > W) continue;
+
+    if (obj.type === 'building') {
+      pixelRect(sx, GROUND_Y - obj.h, obj.w, obj.h, obj.color);
+      // Window trim
+      pixelRect(sx, GROUND_Y - obj.h, obj.w, 4, 'rgba(255,255,255,0.08)');
+      for (const win of obj.wins) {
+        ctx.fillStyle = win.lit ? '#FFFAAA' : '#111';
+        ctx.fillRect(sx + win.wx | 0, GROUND_Y - obj.h + win.wy | 0, 7, 9);
+      }
+    } else {
+      // Streetlight
+      pixelRect(sx + 3, GROUND_Y - 75, 4, 75, '#777');
+      pixelRect(sx - 2, GROUND_Y - 78, 14, 5, '#999');
+      ctx.fillStyle = 'rgba(255,255,160,0.25)';
+      ctx.beginPath();
+      ctx.arc(sx + 5, GROUND_Y - 72, 22, 0, Math.PI * 2);
+      ctx.fill();
+      pixelRect(sx, GROUND_Y - 79, 10, 5, '#FFFF99');
+    }
+  }
+}
+
+function drawGround() {
+  // Sidewalk
+  pixelRect(0, GROUND_Y, W, H - GROUND_Y, '#8a8e8e');
+  pixelRect(0, GROUND_Y, W, 3, '#555');
+  ctx.fillStyle = '#767b7b';
+  for (let x = (-camera % 64 + 64) % 64; x < W; x += 64) {
+    ctx.fillRect(x | 0, GROUND_Y, 2, H - GROUND_Y);
+  }
+  // Curb edge
+  pixelRect(0, GROUND_Y + 3, W, 6, '#999');
+}
+
+// ─── DRAW PLATFORMS ───────────────────────────────────────────────────────────
+function drawPlatforms() {
+  for (const p of platforms) {
+    const sx = p.x - camera;
+    if (sx + p.w < 0 || sx > W) continue;
+    pixelRect(sx, p.y, p.w, p.h, p.color);
+    pixelRect(sx, p.y, p.w, 3, 'rgba(255,255,255,0.18)');
+    pixelRect(sx, p.y + p.h - 3, p.w, 3, 'rgba(0,0,0,0.3)');
+
+    // Simple label detail
+    if (p.label === 'dumpster') {
+      pixelRect(sx + 4, p.y + 6, p.w - 8, 4, '#1a3a1a');
+      pixelRect(sx + 4, p.y + 14, p.w - 8, 4, '#1a3a1a');
+    } else if (p.label === 'hydrant') {
+      pixelRect(sx + 6, p.y + 4, 10, 6, '#aa1111');
+      pixelRect(sx + 8, p.y - 4, 6, 8, '#cc2222');
+    } else if (p.label === 'awning') {
+      for (let s = 0; s < p.w; s += 16) {
+        ctx.fillStyle = s % 32 === 0 ? '#aa3300' : '#cc4422';
+        ctx.fillRect(sx + s | 0, p.y | 0, 16, p.h);
+      }
+    }
+  }
+}
+
+// ─── DRAW COLLECTIBLES ────────────────────────────────────────────────────────
+function drawCollectibles() {
+  for (const c of collectibles) {
+    if (c.collected) continue;
+    const sx = c.x - camera;
+    if (sx < -20 || sx > W + 20) continue;
+    if (c.type === 'wine') drawWineGlass(sx, c.y);
+    else drawReeses(sx, c.y);
+  }
+}
+
+function drawWineGlass(x, y) {
+  // Bowl
+  pixelRect(x + 2, y, 12, 9, '#DD99CC');
+  // Wine fill
+  pixelRect(x + 3, y + 1, 10, 6, '#881133');
+  // Stem
+  pixelRect(x + 7, y + 9, 2, 7, '#CC88BB');
+  // Base
+  pixelRect(x + 2, y + 16, 12, 2, '#CC88BB');
+  // Shine
+  pixelRect(x + 3, y + 1, 2, 4, 'rgba(255,255,255,0.4)');
+}
+
+function drawReeses(x, y) {
+  pixelRect(x, y + 2, 18, 14, '#D4540A');
+  pixelRect(x + 2, y + 4, 14, 10, '#B03A00');
+  pixelRect(x + 4, y + 6, 10, 6, '#5C2000');
+  drawText('R', x + 5, y + 14, 9, '#FF8844', 'left');
+}
+
+// ─── DRAW TESSA ───────────────────────────────────────────────────────────────
+function drawTessa() {
+  const t = tessa;
+  const sx = t.x - camera;
+  if (sx < -60 || sx > W + 60) return;
+
+  // Glow
+  ctx.fillStyle = 'rgba(255, 220, 100, 0.12)';
+  ctx.beginPath();
+  ctx.arc(sx + 14, t.y + 26, 38, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body (pink)
+  pixelRect(sx + 6, t.y + 22, 16, 18, '#FFB6C1');
+  // Head
+  pixelRect(sx + 5, t.y + 8, 18, 16, '#FDDBB4');
+  // Hair
+  pixelRect(sx + 5, t.y + 8, 18, 5, '#6B3A2A');
+  pixelRect(sx + 3, t.y + 10, 4, 8, '#6B3A2A');
+  pixelRect(sx + 21, t.y + 10, 4, 8, '#6B3A2A');
+  // Eyes
+  pixelRect(sx + 8, t.y + 14, 3, 3, '#333');
+  pixelRect(sx + 16, t.y + 14, 3, 3, '#333');
+  // Smile
+  pixelRect(sx + 9, t.y + 20, 8, 2, '#c07070');
+  // Arms
+  pixelRect(sx, t.y + 24, 6, 10, '#FDDBB4');
+  pixelRect(sx + 22, t.y + 24, 6, 10, '#FDDBB4');
+  // Legs
+  pixelRect(sx + 7, t.y + 40, 6, 12, '#FFB6C1');
+  pixelRect(sx + 15, t.y + 40, 6, 12, '#FFB6C1');
+
+  // Label
+  drawText('TESSA!', sx + 14, t.y - 14, 11, '#FFD700');
+  const bob = Math.sin(Date.now() / 280) * 3;
+  drawText('▼', sx + 14, t.y - 4 + bob, 12, '#FFD700');
+}
+
+// ─── DRAW PLAYER ─────────────────────────────────────────────────────────────
+function drawPlayer() {
+  const p = player;
+  if (p.invFrames > 0 && Math.floor(p.invFrames / 5) % 2 === 1) return;
+
+  const sx = p.x - camera;
+  const moving = Math.abs(p.vx) > 0.5 && p.onGround;
+  const f = p.animF;
+
+  ctx.save();
+  if (!p.facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2 + p.w), 0); }
+
+  // Legs
+  ctx.fillStyle = '#111';
+  if (moving) {
+    ctx.fillRect(sx + 4 | 0, (p.y + 30 + (f?4:0)) | 0, 8, 18 - (f?4:0));
+    ctx.fillRect(sx + 12 | 0, (p.y + 30 + (f?0:4)) | 0, 8, 18 - (f?0:4));
+  } else {
+    ctx.fillRect(sx + 4 | 0, p.y + 30 | 0, 8, 18);
+    ctx.fillRect(sx + 12 | 0, p.y + 30 | 0, 8, 18);
+  }
+
+  // Shoes
+  ctx.fillStyle = '#333';
+  ctx.fillRect(sx + 2 | 0, p.y + 44 | 0, 10, 4);
+  ctx.fillRect(sx + 12 | 0, p.y + 44 | 0, 10, 4);
+
+  // Body (black)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(sx + 2 | 0, p.y + 16 | 0, 20, 16);
+
+  // Arms
+  ctx.fillStyle = '#1a1a1a';
+  const armSwing = moving ? (f ? 4 : -4) : 0;
+  ctx.fillRect(sx - 4 | 0, p.y + 16 + armSwing | 0, 7, 14);
+  ctx.fillRect(sx + 21 | 0, p.y + 16 - armSwing | 0, 7, 14);
+
+  // Neck skin
+  ctx.fillStyle = '#FDDBB4';
+  ctx.fillRect(sx + 9 | 0, p.y + 10 | 0, 6, 8);
+
+  // Head
+  ctx.fillStyle = '#FDDBB4';
+  ctx.fillRect(sx + 3 | 0, p.y + 2 | 0, 18, 14);
+
+  // Dark hair
+  ctx.fillStyle = '#1a0800';
+  ctx.fillRect(sx + 2 | 0, p.y | 0, 20, 7);
+  ctx.fillRect(sx | 0, p.y + 2 | 0, 5, 12);
+  ctx.fillRect(sx + 19 | 0, p.y + 2 | 0, 5, 12);
+
+  // Eyes
+  ctx.fillStyle = '#222';
+  ctx.fillRect(sx + 6 | 0, p.y + 7 | 0, 3, 3);
+  ctx.fillRect(sx + 14 | 0, p.y + 7 | 0, 3, 3);
+
+  // Mouth
+  ctx.fillStyle = '#c07878';
+  ctx.fillRect(sx + 8 | 0, p.y + 12 | 0, 6, 2);
+
+  ctx.restore();
+}
+
+// ─── DRAW ENEMIES ─────────────────────────────────────────────────────────────
+function drawEnemies() {
+  for (const e of enemies) {
+    const sx = e.x - camera;
+    if (sx < -60 || sx > W + 60) continue;
+
+    if (e.stomped) {
+      // Squash
+      pixelRect(sx - 4, e.y + 34, e.w + 8, 14, e.outfitColor);
+      pixelRect(sx, e.y + 34, e.w, 8, e.hairColor);
+      continue;
+    }
+
+    const f = e.animF;
+    ctx.save();
+    if (!e.facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2 + e.w), 0); }
+
+    // Legs
+    ctx.fillStyle = '#550000';
+    ctx.fillRect(sx + 4 | 0, e.y + 30 + (f?4:0) | 0, 8, 18 - (f?4:0));
+    ctx.fillRect(sx + 12 | 0, e.y + 30 + (f?0:4) | 0, 8, 18 - (f?0:4));
+
+    // Shoes (heels)
+    ctx.fillStyle = '#220000';
+    ctx.fillRect(sx + 2 | 0, e.y + 44 | 0, 10, 4);
+    ctx.fillRect(sx + 12 | 0, e.y + 44 | 0, 10, 4);
+    ctx.fillRect(sx + 11 | 0, e.y + 46 | 0, 2, 6);
+    ctx.fillRect(sx + 21 | 0, e.y + 46 | 0, 2, 6);
+
+    // Body
+    ctx.fillStyle = e.outfitColor;
+    ctx.fillRect(sx + 2 | 0, e.y + 16 | 0, 20, 16);
+
+    // Arms
+    const aSway = f ? 3 : -3;
+    ctx.fillStyle = '#FDDBB4';
+    ctx.fillRect(sx - 4 | 0, e.y + 18 + aSway | 0, 7, 12);
+    ctx.fillRect(sx + 21 | 0, e.y + 18 - aSway | 0, 7, 12);
+
+    // Head
+    ctx.fillStyle = '#FDDBB4';
+    ctx.fillRect(sx + 3 | 0, e.y + 2 | 0, 18, 14);
+
+    // Big hair
+    ctx.fillStyle = e.hairColor;
+    ctx.fillRect(sx + 1 | 0, e.y - 6 | 0, 22, 12);
+    ctx.fillRect(sx - 3 | 0, e.y | 0, 7, 14);
+    ctx.fillRect(sx + 20 | 0, e.y | 0, 7, 14);
+
+    // Angry brows
+    ctx.fillStyle = '#442200';
+    ctx.fillRect(sx + 5 | 0, e.y + 6 | 0, 5, 2);
+    ctx.fillRect(sx + 14 | 0, e.y + 6 | 0, 5, 2);
+
+    // Eyes
+    ctx.fillStyle = '#111';
+    ctx.fillRect(sx + 6 | 0, e.y + 8 | 0, 3, 3);
+    ctx.fillRect(sx + 15 | 0, e.y + 8 | 0, 3, 3);
+
+    // Mouth (frown)
+    ctx.fillStyle = '#882244';
+    ctx.fillRect(sx + 8 | 0, e.y + 13 | 0, 8, 2);
+
+    ctx.restore();
+
+    // Insult bubble
+    if (e.insult && e.insultTimer > 0) drawInsultBubble(sx + e.w / 2, e.y, e.insult);
+  }
+}
+
+function drawInsultBubble(cx, ty, text) {
+  ctx.font = 'bold 8px monospace';
+  const tw = ctx.measureText(text).width;
+  const bx = cx - tw / 2 - 8, by = ty - 34, bw = tw + 16, bh = 20;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(bx | 0, by | 0, bw | 0, bh);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(bx | 0, by | 0, bw | 0, bh);
+  // Tail
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(cx - 4 | 0, by + bh | 0, 8, 6);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(cx - 4 | 0, by + bh | 0, 1.5, 6);
+  ctx.fillRect(cx + 2.5 | 0, by + bh | 0, 1.5, 6);
+  // Text
+  ctx.fillStyle = '#CC0000';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, cx | 0, (by + 14) | 0);
+}
+
+// ─── DRAW HUD ────────────────────────────────────────────────────────────────
+function drawHUD() {
+  // Health bar bg
+  pixelRect(10, 10, 154, 18, '#222');
+  const hp = player.health / HEALTH_MAX;
+  const hcol = hp > 0.5 ? '#22DD44' : hp > 0.25 ? '#FFAA00' : '#FF2222';
+  pixelRect(12, 12, Math.round(150 * hp), 14, hcol);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(10, 10, 154, 18);
+  drawText('HP', 18, 23, 10, '#fff', 'left');
+
+  // Lives
+  for (let i = 0; i < 3; i++) {
+    drawText('♥', 175 + i * 20, 24, 14, i < lives ? '#FF3355' : '#333');
+  }
+
+  // Score
+  drawText(`SCORE: ${score}`, W - 10, 24, 12, '#FFD700', 'right');
+
+  // Day
+  drawText(DAYS[day], W / 2, 24, 13, '#88AAFF');
+}
+
+// ─── DRAW SCREENS ────────────────────────────────────────────────────────────
+function drawOverlay(alpha=0.72) {
+  ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawTitle() {
+  // Background
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#060614'); g.addColorStop(1, '#180a28');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // Stars
+  for (let i = 0; i < 80; i++) {
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + (i%3)*0.2})`;
+    ctx.fillRect((i * 173 + 41) % W, (i * 59 + 7) % 200, 2, 2);
+  }
+
+  drawText("CARLY'S LONG DAY", W/2, 80, 42, '#FFD700');
+  // Subtitle outline effect
+  ctx.font = 'bold 42px monospace'; ctx.textAlign = 'center';
+  ctx.strokeStyle = '#882200'; ctx.lineWidth = 3;
+  ctx.strokeText("CARLY'S LONG DAY", W/2, 80);
+
+  drawText('Get home to baby Tessa!', W/2, 118, 16, '#FF99BB');
+  drawText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', W/2, 136, 10, '#444');
+
+  const tips = [
+    ['MOVE', 'A / D  or  ← →'],
+    ['JUMP', 'SPACE  or  W  or  ↑'],
+    ['DEFEAT', 'Jump on Mean Ladies'],
+    ['WINE 🍷', '+10 points each'],
+    ['REESES 🍫', '+30 HP each'],
+    ['DANGER', 'Insult bubbles drain HP!'],
+  ];
+  tips.forEach(([k,v], i) => {
+    drawText(k, W/2 - 80, 172 + i * 26, 11, '#FFD700', 'right');
+    drawText(v, W/2 - 68, 172 + i * 26, 11, '#ccc', 'left');
+  });
+
+  drawText('7 DAYS  ·  3 LIVES  ·  GET HOME EACH NIGHT', W/2, 360, 12, '#667788');
+
+  const p = 0.6 + Math.sin(Date.now() / 380) * 0.4;
+  ctx.globalAlpha = p;
+  drawText('PRESS  SPACE  TO  START', W/2, 410, 18, '#FFD700');
+  ctx.globalAlpha = 1;
+}
+
+function drawDayIntro() {
+  drawOverlay(0.78);
+  const t = introTimer;
+  const scale = t < 120 ? 1 : 1 + (t - 120) / 30 * 0.4;
+  ctx.save();
+  ctx.translate(W/2, H/2);
+  ctx.scale(scale, scale);
+  drawText(DAYS[day], 0, -20, 52, '#FFD700', 'center');
+  ctx.restore();
+  drawText('Get home to Tessa!', W/2, H/2 + 36, 18, '#fff');
+  if (day === 0) drawText('Good luck on your first day!', W/2, H/2 + 64, 13, '#aaa');
+  else if (day < 4) drawText(`Day ${day+1} of 7 — hang in there!`, W/2, H/2 + 64, 13, '#aaa');
+  else drawText(`Almost the weekend — ${7-day} day${7-day>1?'s':''} left!`, W/2, H/2 + 64, 13, '#aaa');
+}
+
+function drawLevelComplete() {
+  drawOverlay(0.8);
+  drawText('YOU MADE IT HOME!', W/2, H/2 - 60, 32, '#FFD700');
+  drawText(`${DAYS[day]} Complete!`, W/2, H/2 - 18, 20, '#FF99BB');
+  drawText(`Day score:   ${dayScore}`, W/2, H/2 + 18, 16, '#fff');
+  drawText(`Total score: ${score + dayScore}`, W/2, H/2 + 44, 16, '#FFD700');
+  if (day < 6) {
+    drawText(`Next: ${DAYS[day+1]}`, W/2, H/2 + 78, 14, '#88AAFF');
+  }
+  const p = 0.5 + Math.sin(Date.now() / 400) * 0.5;
+  ctx.globalAlpha = p;
+  drawText('SPACE to continue', W/2, H/2 + 108, 13, '#aaa');
+  ctx.globalAlpha = 1;
+}
+
+function drawGameOver() {
+  ctx.fillStyle = '#0e0000'; ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 40; i++) {
+    ctx.fillStyle = `rgba(180,0,0,${0.05 + (i%4)*0.03})`;
+    ctx.fillRect((i*137)%W, (i*61)%H, 3, 3);
+  }
+  drawText('GAME OVER', W/2, 160, 56, '#FF2222');
+  ctx.font = 'bold 56px monospace'; ctx.textAlign = 'center';
+  ctx.strokeStyle = '#660000'; ctx.lineWidth = 3;
+  ctx.strokeText('GAME OVER', W/2, 160);
+  drawText('The mean ladies won this week.', W/2, 220, 17, '#cc8888');
+  drawText(`You made it to ${DAYS[day]}`, W/2, 256, 15, '#aaa');
+  drawText(`Final Score: ${score}`, W/2, 292, 20, '#FFD700');
+  const p = 0.5 + Math.sin(Date.now() / 400) * 0.5;
+  ctx.globalAlpha = p;
+  drawText('PRESS SPACE TO TRY AGAIN', W/2, 380, 16, '#FF6666');
+  ctx.globalAlpha = 1;
+}
+
+function drawWin() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#000f00'); g.addColorStop(1, '#001800');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // Confetti
+  for (let i = 0; i < 60; i++) {
+    const t = (Date.now() / 20 + i * 50) % H;
+    ctx.fillStyle = ['#FFD700','#FF69B4','#00CED1','#FF6347','#98FB98'][i%5];
+    ctx.fillRect(((i * 137 + 23) % W) | 0, t | 0, 5, 5);
+  }
+  drawText('YOU SURVIVED THE WEEK!', W/2, 130, 34, '#FFD700');
+  drawText('Carly made it home to Tessa every night!', W/2, 180, 14, '#FF99BB');
+  drawText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', W/2, 202, 10, '#335533');
+  drawText(`FINAL SCORE: ${score}`, W/2, 262, 30, '#fff');
+  const p = 0.5 + Math.sin(Date.now() / 400) * 0.5;
+  ctx.globalAlpha = p;
+  drawText('PRESS SPACE TO PLAY AGAIN', W/2, 380, 16, '#FFD700');
+  ctx.globalAlpha = 1;
+}
+
+// ─── MAIN DRAW ───────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (state === ST.TITLE)    { drawTitle();    return; }
+  if (state === ST.GAMEOVER) { drawGameOver(); return; }
+  if (state === ST.WIN)      { drawWin();      return; }
+
+  // World (camera offset)
+  ctx.save();
+  ctx.translate(-Math.round(camera), 0);
+  drawBackground();
+  drawGround();
+  drawPlatforms();
+  drawCollectibles();
+  drawTessa();
+  drawEnemies();
+  drawPlayer();
+  ctx.restore();
+
+  drawHUD();
+
+  if (state === ST.INTRO)    drawDayIntro();
+  if (state === ST.COMPLETE) drawLevelComplete();
+}
+
+// ─── GAME LOOP ───────────────────────────────────────────────────────────────
+state = ST.TITLE;
+lives = 3; score = 0; day = 0;
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
