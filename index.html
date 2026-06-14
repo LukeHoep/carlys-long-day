@@ -67,12 +67,13 @@ function saveToLeaderboard(s) {
 }
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
-const ST = { TITLE:0, INTRO:1, PLAY:2, COMPLETE:3, GAMEOVER:4, WIN:5 };
+const ST = { TITLE:0, INTRO:1, PLAY:2, COMPLETE:3, GAMEOVER:4, WIN:5, HUG:6 };
 let state, day, lives, score, dayScore;
 let player, enemies, collectibles, platforms, bgObjects, tessa, projectiles, boss;
 let levelW, camera;
-let introTimer, completeTimer;
+let introTimer, completeTimer, hugTimer;
 let scoreSaved = false;
+let gameFrames = 0; // frames accumulated during ST.PLAY only
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -88,6 +89,7 @@ document.addEventListener('keyup', e => { keys[e.code] = false; });
 function onKeyDown(code) {
   const jump = code === 'Space' || code === 'KeyW' || code === 'ArrowUp';
   if (state === ST.TITLE    && (code === 'Space' || code === 'Enter')) { startGame(); return; }
+  if (state === ST.HUG      && code === 'Space') { hugTimer = 0; return; }
   if (state === ST.PLAY && jump) {
     player.jumpBuffer = 10; // arm the timed-bounce window
     if (player.onGround) { player.vy = JUMP_V; player.onGround = false; }
@@ -365,7 +367,7 @@ function mkPlayer() {
 
 // ─── GAME FLOW ────────────────────────────────────────────────────────────────
 function startGame() {
-  lives = 3; score = 0; day = 0; scoreSaved = false;
+  lives = 3; score = 0; day = 0; scoreSaved = false; gameFrames = 0;
   beginDay();
 }
 function beginDay() {
@@ -378,8 +380,11 @@ function restartDay() {
 function advanceDay() {
   score += dayScore; day++;
   if (day >= 7) {
+    const timePenalty = Math.floor(gameFrames / 60);
+    score = Math.max(0, score - timePenalty);
     if (!scoreSaved) { saveToLeaderboard(score); scoreSaved = true; }
-    state = ST.WIN;
+    state = ST.HUG;
+    hugTimer = 380; // ~6 seconds then auto-advance to leaderboard
   } else { beginDay(); }
 }
 
@@ -387,7 +392,9 @@ function advanceDay() {
 function update() {
   if (state === ST.INTRO)    { if (--introTimer <= 0) state = ST.PLAY; return; }
   if (state === ST.COMPLETE) { if (--completeTimer <= 0) advanceDay(); return; }
+  if (state === ST.HUG)      { if (--hugTimer <= 0) state = ST.WIN; return; }
   if (state !== ST.PLAY) return;
+  gameFrames++;
   updatePlayer();
   updateEnemies();
   updateBoss();
@@ -991,6 +998,11 @@ function drawHUD() {
   for (let i = 0; i < 3; i++) drawText('♥', 175 + i * 20, 24, 14, i < lives ? '#FF3355' : '#333');
   drawText(`SCORE: ${score}`, W - 10, 24, 12, '#FFD700', 'right');
   drawText(DAYS[day], W / 2, 24, 13, '#88AAFF');
+  // Timer (counts up, shown below day name)
+  const ts = Math.floor(gameFrames / 60);
+  const tmm = String(Math.floor(ts / 60)).padStart(2,'0');
+  const tss = String(ts % 60).padStart(2,'0');
+  drawText(`⏱ ${tmm}:${tss}`, W / 2, 38, 10, '#7AACDD');
 
   // Boss health bar on Sunday
   if (day === 6 && boss && !boss.defeated) {
@@ -1084,92 +1096,143 @@ function drawGameOver() {
 }
 
 function drawWin() {
-  // Background
+  const now = Date.now();
+
+  // Background + confetti
   const g = ctx.createLinearGradient(0,0,0,H);
   g.addColorStop(0,'#050a1a'); g.addColorStop(1,'#0a0518');
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-  // Confetti
-  for (let i=0;i<70;i++) {
-    const t=(Date.now()/18+i*47)%H;
+  for (let i=0;i<55;i++) {
+    const t=(now/16+i*49)%H;
     ctx.fillStyle=['#FFD700','#FF69B4','#00CED1','#FF6347','#98FB98','#DDA0DD'][i%6];
     ctx.fillRect(((i*137+23)%W)|0,t|0,5,5);
   }
 
-  drawText('YOU SURVIVED THE WEEK!', W/2, 44, 28, '#FFD700');
-  ctx.font='bold 28px monospace'; ctx.textAlign='center';
-  ctx.strokeStyle='#884400'; ctx.lineWidth=2; ctx.strokeText('YOU SURVIVED THE WEEK!',W/2,44);
+  drawText('HIGH SCORES', W/2, 36, 26, '#FFD700');
+  ctx.font='bold 26px monospace'; ctx.textAlign='center';
+  ctx.strokeStyle='#884400'; ctx.lineWidth=2;
+  ctx.strokeText('HIGH SCORES', W/2, 36);
 
-  // ── Animated hug scene ──────────────────────────────────────────────
-  const now = Date.now();
-  const hugCY = 82;
-
-  // Gentle squeeze pulse: Carly and Tessa lean 0–4px into each other
-  const squeeze = Math.sin(now / 680) * 2 + 2;
-  // Shared slow bob: both rock up/down together like a slow breath
-  const bob = Math.sin(now / 920) * 2.5;
-
-  // Soft radial glow centred on the embrace
-  const glowR = ctx.createRadialGradient(W/2, hugCY + 26, 6, W/2, hugCY + 26, 82);
-  glowR.addColorStop(0,   'rgba(255,140,200,0.32)');
-  glowR.addColorStop(0.45,'rgba(255,90,160,0.14)');
-  glowR.addColorStop(1,   'rgba(255,50,130,0)');
-  ctx.fillStyle = glowR;
-  ctx.beginPath(); ctx.arc(W/2, hugCY + 26, 82, 0, Math.PI*2); ctx.fill();
-
-  // Characters
-  const carlyX = W/2 - 72 + squeeze;
-  const tessaX  = W/2 + 20 - squeeze;
-  drawPlayerAt(carlyX, hugCY + bob, true, 0, false, 0);
-  drawTessa(tessaX, hugCY + bob - 4, true);
-
-  // Overlapping hug arms drawn over both sprites
-  pixelRect(W/2 - 10, hugCY + bob + 21, 22, 11, '#1a1a1a');
-  pixelRect(W/2 - 8,  hugCY + bob + 17, 18, 9,  '#FDDBB4');
-
-  // ── Continuous heart fountain ──────────────────────────────────────
-  // 14 hearts at staggered phases so the stream looks full and organic.
-  const HC = ['#FF1493','#FF69B4','#FF99CC','#FF4466','#FF88EE','#FFB6C1','#FF6090'];
-  const HG = ['♥','♡','♥','♥','♡','♥','♡'];
-  const PERIOD = 2400; // ms per full cycle per heart
-  for (let h = 0; h < 14; h++) {
-    const phase = ((now + h * (PERIOD / 14)) % PERIOD) / PERIOD; // 0 → 1
-    // Organic left/right drift around centre
-    const drift = Math.sin(h * 1.9 + phase * Math.PI * 2.2) * 32;
-    const hx = W/2 + drift;
-    const hy = hugCY + 14 - phase * 100;          // float 100px upward
-    // Fade out in the top quarter of travel
-    const alpha = phase < 0.72 ? 1.0 : (1 - phase) / 0.28;
-    // Three size classes: small, medium, large
-    const sz = [8, 13, 18][h % 3];
-    ctx.globalAlpha = Math.max(0, alpha) * 0.88;
-    drawText(HG[h % 7], hx, hy, sz, HC[h % 7]);
-  }
-  ctx.globalAlpha = 1;
-
-  drawText(`FINAL SCORE: ${score}`, W/2, hugCY + 78, 22, '#fff');
+  // Time & score summary
+  const ts = Math.floor(gameFrames / 60);
+  const tmm = String(Math.floor(ts/60)).padStart(2,'0');
+  const tss = String(ts%60).padStart(2,'0');
+  drawText(`Final Score: ${score}`, W/2, 62, 18, '#fff');
+  drawText(`Time: ${tmm}:${tss}  (−${ts} pts time penalty)`, W/2, 82, 11, '#7AACDD');
 
   // Leaderboard
   const lb = getLeaderboard();
-  const lbY = hugCY + 108;
-  drawText('━━━━━━  HIGH SCORES  ━━━━━━', W/2, lbY, 12, '#FFD700');
+  const lbY = 106;
+  drawText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', W/2, lbY, 10, '#333');
   if (lb.length === 0) {
-    drawText('No scores yet!', W/2, lbY + 22, 12, '#666');
+    drawText('No scores yet!', W/2, lbY + 26, 13, '#666');
   } else {
-    lb.slice(0, 6).forEach((entry, i) => {
-      const isNew = i === 0 && !scoreSaved;
-      const col = i === 0 ? '#FFD700' : i === 1 ? '#CCCCCC' : i === 2 ? '#CD7F32' : '#888';
-      const rank = ['🥇','🥈','🥉','4.','5.','6.'][i];
+    lb.slice(0, 8).forEach((entry, i) => {
+      const col = i===0 ? '#FFD700' : i===1 ? '#CCCCCC' : i===2 ? '#CD7F32' : '#888';
+      const rank = ['🥇','🥈','🥉','4.','5.','6.','7.','8.'][i];
       const line = `${rank}  ${String(entry.score).padStart(6,' ')}   ${entry.date}`;
-      drawText(line, W/2, lbY + 22 + i * 22, 12, col);
+      drawText(line, W/2, lbY + 20 + i * 28, 13, col);
       if (entry.score === score && i === lb.findIndex(e=>e.score===score)) {
-        drawText('◄ YOU', W/2 + 130, lbY + 22 + i * 22, 11, '#FFD700', 'left');
+        drawText('◄ YOU', W/2 + 138, lbY + 20 + i * 28, 11, '#FFD700', 'left');
       }
     });
   }
 
-  const p=0.5+Math.sin(Date.now()/400)*0.5; ctx.globalAlpha=p;
+  const p=0.5+Math.sin(now/400)*0.5; ctx.globalAlpha=p;
   drawText('PRESS SPACE TO PLAY AGAIN', W/2, H - 18, 14, '#FFD700');
   ctx.globalAlpha=1;
+}
+
+// ─── HUG CUTSCENE ────────────────────────────────────────────────────────────
+function drawHug() {
+  const now = Date.now();
+
+  // Background: deep midnight
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#06020f'); bg.addColorStop(1,'#130820');
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+
+  // Twinkling stars
+  for (let i = 0; i < 70; i++) {
+    const twinkle = 0.3 + Math.sin(now/380 + i * 0.9) * 0.3;
+    ctx.fillStyle = `rgba(255,255,255,${twinkle})`;
+    ctx.fillRect((i*179+23)%W, (i*67+11)%(H*0.65)|0, 2, 2);
+  }
+
+  // Large soft pink glow centred on hug
+  const cx = W/2, cy = H*0.62;
+  const bigGlow = ctx.createRadialGradient(cx,cy,8,cx,cy,180);
+  bigGlow.addColorStop(0,'rgba(255,120,200,0.28)');
+  bigGlow.addColorStop(0.45,'rgba(200,70,160,0.10)');
+  bigGlow.addColorStop(1,'rgba(170,40,130,0)');
+  ctx.fillStyle = bigGlow;
+  ctx.beginPath(); ctx.arc(cx,cy,180,0,Math.PI*2); ctx.fill();
+
+  // Animation parameters
+  const squeeze = Math.sin(now/660) * 3 + 2;   // 0–5px lean toward each other
+  const bob     = Math.sin(now/900) * 3;         // ±3px shared breath
+
+  // ── Draw characters at 1.85× scale ──────────────────────────────────
+  // Pivot the scale at (cx, cy) so they appear centred
+  const hugY  = cy;           // baseline of characters in canvas coords
+  const SCALE = 1.85;
+  const carlyX = cx - 40 + squeeze;   // canvas coords (pre-scale)
+  const tessaX  = cx - 12 - squeeze;
+
+  ctx.save();
+  ctx.translate(cx, hugY);
+  ctx.scale(SCALE, SCALE);
+  ctx.translate(-cx, -hugY);
+
+  drawPlayerAt(carlyX, hugY - 48 + bob, true,  0, false, 0);
+  drawTessa   (tessaX, hugY - 52 + bob, true);
+
+  // Overlapping hug arms (drawn in scaled space so they match the characters)
+  pixelRect(cx - 12, hugY - 26 + bob, 26, 11, '#1a1a1a');
+  pixelRect(cx - 10, hugY - 30 + bob, 22,  9, '#FDDBB4');
+
+  ctx.restore();
+
+  // ── Heart fountain — drawn at screen coords outside the scale ────────
+  // Heads appear at screen y ≈ hugY - 48*SCALE = cy - 88.8
+  const heartBaseY = cy - 90;
+  const HC = ['#FF1493','#FF69B4','#FF99CC','#FF4466','#FF88EE','#FFB6C1','#FF6090'];
+  const HG = ['♥','♡','♥','♥','♡','♥','♡'];
+  const PERIOD = 2200;
+  for (let h = 0; h < 18; h++) {
+    const phase = ((now + h * (PERIOD / 18)) % PERIOD) / PERIOD;
+    const drift  = Math.sin(h * 1.9 + phase * Math.PI * 2.4) * 48;
+    const hx     = cx + drift;
+    const hy     = heartBaseY - phase * 140;
+    const alpha  = phase < 0.68 ? 1.0 : (1 - phase) / 0.32;
+    const sz     = [9, 14, 20][h % 3];
+    ctx.globalAlpha = Math.max(0, alpha) * 0.9;
+    drawText(HG[h % 7], hx, hy, sz, HC[h % 7]);
+  }
+  ctx.globalAlpha = 1;
+
+  // ── Text ─────────────────────────────────────────────────────────────
+  const textFade = Math.min(1, (380 - hugTimer) / 30); // fade in over first 30 frames
+  ctx.globalAlpha = textFade;
+  drawText("CARLY MADE IT HOME!", W/2, 52, 30, '#FFD700');
+  ctx.font='bold 30px monospace'; ctx.textAlign='center';
+  ctx.strokeStyle='#7a3800'; ctx.lineWidth=2.5;
+  ctx.strokeText("CARLY MADE IT HOME!", W/2, 52);
+  ctx.globalAlpha = textFade;
+  drawText('Safe with her baby Tessa  ♥', W/2, 84, 15, '#FF99BB');
+  ctx.globalAlpha = 1;
+
+  // Skip prompt
+  const skipA = 0.4 + Math.sin(now/480)*0.35;
+  ctx.globalAlpha = skipA;
+  drawText('SPACE  to see leaderboard', W/2, H - 16, 12, '#888');
+  ctx.globalAlpha = 1;
+
+  // Fade to black in last 60 frames before advancing
+  if (hugTimer < 60) {
+    ctx.fillStyle = `rgba(0,0,0,${(60 - hugTimer) / 60})`;
+    ctx.fillRect(0,0,W,H);
+  }
 }
 
 // ─── MAIN DRAW ───────────────────────────────────────────────────────────────
@@ -1177,6 +1240,7 @@ function draw() {
   ctx.clearRect(0,0,W,H);
   if (state===ST.TITLE)    { drawTitle();    return; }
   if (state===ST.GAMEOVER) { drawGameOver(); return; }
+  if (state===ST.HUG)      { drawHug();      return; }
   if (state===ST.WIN)      { drawWin();      return; }
 
   drawBackground();
