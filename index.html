@@ -27,6 +27,16 @@ const HEALTH_MAX = 100;
 
 const DAYS = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 
+const DAY_THEMES = [
+  { sky1:'#090918', sky2:'#1a0e2e', desc:'Just another Monday. The regulars are restless.' },
+  { sky1:'#060e1a', sky2:'#0e2040', desc:'Tuesday. A few more mean ladies out tonight.' },
+  { sky1:'#120818', sky2:'#280e3a', desc:"Hump day. They've had time to build up complaints." },
+  { sky1:'#180808', sky2:'#2e0e1a', desc:'Thursday. The weekend crowd is warming up early.' },
+  { sky1:'#080808', sky2:'#181020', desc:"Friday. They've been drinking since noon." },
+  { sky1:'#040a18', sky2:'#081830', desc:'Saturday. Pure chaos. Stay sharp.' },
+  { sky1:'#120606', sky2:'#200808', desc:'Sunday. The longest shift. Get home to Tessa.' },
+];
+
 const INSULTS = [
   "I'VE BEEN WAITING!",
   "I KNOW THE OWNER!",
@@ -120,49 +130,143 @@ function generateLevel(d) {
     }
   }
 
-  // Platforms: benches, dumpsters, awnings, crates, fire hydrants
-  const platDefs = [
-    { w:80,  h:14, elev:14,  color:'#6B4423', label:'bench'   },
-    { w:96,  h:44, elev:44,  color:'#2a5a2a', label:'dumpster'},
-    { w:130, h:10, elev:100, color:'#882200', label:'awning'  },
-    { w:48,  h:44, elev:44,  color:'#8a7040', label:'crate'   },
-    { w:22,  h:34, elev:34,  color:'#cc2222', label:'hydrant' },
-  ];
-  const numPlat = 6 + d * 2;
-  let px = 500;
-  for (let i = 0; i < numPlat; i++) {
-    const def = pick(platDefs);
-    px += randInt(120, 280);
-    platforms.push({ x: px, y: GROUND_Y - def.elev, w: def.w, h: def.h, color: def.color, label: def.label });
-    px += def.w;
+  // ─── PLATFORM GROUPS (progressive by day) ────────────────────────────────────
+  // d0: mostly singles           d4: full complexity, tighter gaps
+  // d1: singles + stepUps        d5: all types, lots of towers
+  // d2: + staircases             d6: max density, short gaps
+  // d3: + awnings & towers
+
+  const highPlatforms = [];
+  let px = 420;
+  const numGroups = 8 + d * 3;
+
+  for (let g = 0; g < numGroups; g++) {
+    if (px > levelW - 400) break;
+    const t = Math.random();
+    let group;
+
+    if (d === 0) {
+      group = t < 0.75 ? mkGroupSingle(px) : mkGroupStepUp(px);
+    } else if (d === 1) {
+      if (t < 0.35) group = mkGroupSingle(px);
+      else if (t < 0.75) group = mkGroupStepUp(px);
+      else group = mkGroupStaircase(px);
+    } else if (d === 2) {
+      if (t < 0.15) group = mkGroupSingle(px);
+      else if (t < 0.45) group = mkGroupStepUp(px);
+      else if (t < 0.75) group = mkGroupStaircase(px);
+      else group = mkGroupAwning(px);
+    } else if (d === 3) {
+      if (t < 0.10) group = mkGroupSingle(px);
+      else if (t < 0.30) group = mkGroupStepUp(px);
+      else if (t < 0.55) group = mkGroupStaircase(px);
+      else if (t < 0.78) group = mkGroupAwning(px);
+      else group = mkGroupTower(px);
+    } else {
+      if (t < 0.05) group = mkGroupSingle(px);
+      else if (t < 0.20) group = mkGroupStepUp(px);
+      else if (t < 0.42) group = mkGroupStaircase(px);
+      else if (t < 0.68) group = mkGroupAwning(px);
+      else group = mkGroupTower(px);
+    }
+
+    for (const pl of group) {
+      platforms.push(pl);
+      if (pl.y < GROUND_Y - 60) highPlatforms.push(pl);
+    }
+
+    const rightmost = Math.max(...group.map(p => p.x + p.w));
+    const minGap = Math.max(45, 110 - d * 10);
+    const maxGap = Math.max(90, 200 - d * 14);
+    px = rightmost + randInt(minGap, maxGap);
   }
 
-  // Enemies
+  // ─── ENEMIES ──────────────────────────────────────────────────────────────────
   const numEnemies = 2 + Math.floor(d * 1.5);
-  const speed = 1.0 + d * 0.22;
+  const speed = 1.0 + d * 0.25;
   for (let i = 0; i < numEnemies; i++) {
-    const ex = 700 + (i / numEnemies) * (levelW - 900);
+    const ex = 600 + (i / numEnemies) * (levelW - 800);
     enemies.push(mkEnemy(ex, speed));
   }
 
-  // Collectibles: wine on ground & platforms, reeses scattered
-  const numWine = 10 + d * 3;
-  const numReeses = 3 + d;
-  for (let i = 0; i < numWine; i++) {
-    const cx = 300 + Math.random() * (levelW - 500);
-    const plat = platforms.find(p => cx >= p.x + 4 && cx <= p.x + p.w - 4);
-    const cy = plat ? plat.y - 20 : GROUND_Y - 20;
-    collectibles.push({ x: cx, y: cy, type: 'wine', collected: false });
-  }
-  for (let i = 0; i < numReeses; i++) {
-    const cx = 400 + Math.random() * (levelW - 600);
-    const plat = platforms.find(p => cx >= p.x + 4 && cx <= p.x + p.w - 4);
-    const cy = plat ? plat.y - 18 : GROUND_Y - 18;
-    collectibles.push({ x: cx, y: cy, type: 'reeses', collected: false });
-  }
+  // ─── COLLECTIBLES ─────────────────────────────────────────────────────────────
+  // 40% more wine, 70% less reeses. Wines primarily on elevated platforms.
+  const numWine = 14 + d * 4;
+  const numReeses = Math.max(1, 2 - Math.floor(d * 0.4));
 
-  // Tessa at the end
+  const shuffledPlats = [...platforms].sort(() => Math.random() - 0.5);
+  const wineOnPlats = Math.round(numWine * 0.75);
+  const wineOnGround = numWine - wineOnPlats;
+
+  for (let i = 0; i < wineOnPlats; i++) {
+    const pl = shuffledPlats[i % shuffledPlats.length];
+    const cx = pl.x + randInt(4, Math.max(5, pl.w - 4));
+    collectibles.push({ x: cx, y: pl.y - 20, type: 'wine', collected: false });
+  }
+  // Extra wine on every high platform (reward for climbing)
+  for (const hp of highPlatforms) {
+    if (Math.random() < 0.88)
+      collectibles.push({ x: hp.x + hp.w / 2, y: hp.y - 20, type: 'wine', collected: false });
+  }
+  for (let i = 0; i < wineOnGround; i++)
+    collectibles.push({ x: 300 + Math.random() * (levelW - 500), y: GROUND_Y - 20, type: 'wine', collected: false });
+
+  // Reeses are rare and on the ground
+  for (let i = 0; i < numReeses; i++)
+    collectibles.push({ x: 400 + Math.random() * (levelW - 600), y: GROUND_Y - 18, type: 'reeses', collected: false });
+
   tessa = { x: levelW - 160, y: GROUND_Y - 52, w: 28, h: 52 };
+}
+
+// ─── PLATFORM GROUP BUILDERS ─────────────────────────────────────────────────
+function mkPl(x, y, w, h, color, label) { return { x, y, w, h, color, label }; }
+
+function mkGroupSingle(x) {
+  const defs = [
+    [90, 14, '#6B4423', 'bench'],
+    [96, 44, '#2a5a2a', 'dumpster'],
+    [52, 44, '#8a7040', 'crate'],
+    [22, 34, '#cc2222', 'hydrant'],
+  ];
+  const [w, elev, col, lbl] = pick(defs);
+  return [mkPl(x, GROUND_Y - elev, w, elev, col, lbl)];
+}
+
+function mkGroupStepUp(x) {
+  // Low obstacle → high awning (jump on box, then leap to awning)
+  const stepW = pick([80, 96, 64]);
+  const stepElev = pick([44, 34]);
+  const gap = randInt(50, 90);
+  return [
+    mkPl(x,                 GROUND_Y - stepElev, stepW, stepElev, '#2a5a2a', 'dumpster'),
+    mkPl(x + stepW + gap,   GROUND_Y - 100,      110,  10,        '#882200', 'awning'),
+  ];
+}
+
+function mkGroupStaircase(x) {
+  // Three ascending steps — low dumpster → mid awning → high awning
+  return [
+    mkPl(x,       GROUND_Y - 44,  80,  44, '#2a5a2a', 'dumpster'),
+    mkPl(x + 100, GROUND_Y - 85,  90,  10, '#882200', 'awning'),
+    mkPl(x + 210, GROUND_Y - 135, 110, 10, '#aa3300', 'awning'),
+  ];
+}
+
+function mkGroupAwning(x) {
+  // Crate with a high awning directly above — must land on crate first
+  return [
+    mkPl(x - 5,  GROUND_Y - 44,  84,  44, '#8a7040', 'crate'),
+    mkPl(x - 20, GROUND_Y - 130, 128, 10, '#882200', 'awning'),
+  ];
+}
+
+function mkGroupTower(x) {
+  // Dumpster → floating shelf → high awning: three-tier stack
+  return [
+    mkPl(x,      GROUND_Y - 44,  96,  44, '#2a5a2a', 'dumpster'),
+    mkPl(x + 8,  GROUND_Y - 92,  80,  10, '#8a7040', 'crate'),
+    mkPl(x - 18, GROUND_Y - 148, 140, 10, '#882200', 'awning'),
+  ];
 }
 
 function mkEnemy(x, speed) {
@@ -310,6 +414,19 @@ function updateEnemies() {
 
     if (e.y + e.h > GROUND_Y) e.y = GROUND_Y - e.h;
 
+    // Platform collision — enemies are blocked by ground-level obstacles
+    for (const pl of platforms) {
+      if (pl.y + pl.h < GROUND_Y - 5) continue; // floating platform, skip
+      if (!overlap(e, pl)) continue;
+      if (e.x + e.w / 2 < pl.x + pl.w / 2) {
+        e.x = pl.x - e.w;
+        e.vx = Math.abs(e.vx);   // bounce right
+      } else {
+        e.x = pl.x + pl.w;
+        e.vx = -Math.abs(e.vx);  // bounce left
+      }
+    }
+
     // Insults + throw projectile
     if (e.mode === 'chase') {
       if (--e.insultCooldown <= 0) {
@@ -415,10 +532,11 @@ function drawText(text, x, y, size, col, align='center') {
 
 // ─── DRAW BACKGROUND ─────────────────────────────────────────────────────────
 function drawBackground() {
-  // Sky
+  // Sky — distinct per day
+  const theme = DAY_THEMES[day];
   const g = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
-  g.addColorStop(0, '#090918');
-  g.addColorStop(1, '#1a0e2e');
+  g.addColorStop(0, theme.sky1);
+  g.addColorStop(1, theme.sky2);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, GROUND_Y);
 
@@ -541,36 +659,87 @@ function drawTessa() {
   const sx = t.x - camera;
   if (sx < -60 || sx > W + 60) return;
 
-  // Glow
-  ctx.fillStyle = 'rgba(255, 220, 100, 0.12)';
+  // Warm glow
+  const glow = ctx.createRadialGradient(sx + 14, t.y + 28, 4, sx + 14, t.y + 28, 46);
+  glow.addColorStop(0, 'rgba(255,230,120,0.22)');
+  glow.addColorStop(1, 'rgba(255,200,80,0)');
+  ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.arc(sx + 14, t.y + 26, 38, 0, Math.PI * 2);
+  ctx.arc(sx + 14, t.y + 28, 46, 0, Math.PI * 2);
   ctx.fill();
 
-  // Body (pink)
-  pixelRect(sx + 6, t.y + 22, 16, 18, '#FFB6C1');
-  // Head
-  pixelRect(sx + 5, t.y + 8, 18, 16, '#FDDBB4');
-  // Hair
-  pixelRect(sx + 5, t.y + 8, 18, 5, '#6B3A2A');
-  pixelRect(sx + 3, t.y + 10, 4, 8, '#6B3A2A');
-  pixelRect(sx + 21, t.y + 10, 4, 8, '#6B3A2A');
-  // Eyes
-  pixelRect(sx + 8, t.y + 14, 3, 3, '#333');
-  pixelRect(sx + 16, t.y + 14, 3, 3, '#333');
-  // Smile
-  pixelRect(sx + 9, t.y + 20, 8, 2, '#c07070');
-  // Arms
-  pixelRect(sx, t.y + 24, 6, 10, '#FDDBB4');
-  pixelRect(sx + 22, t.y + 24, 6, 10, '#FDDBB4');
-  // Legs
-  pixelRect(sx + 7, t.y + 40, 6, 12, '#FFB6C1');
-  pixelRect(sx + 15, t.y + 40, 6, 12, '#FFB6C1');
+  const by = t.y + 4; // baseline offset
 
-  // Label
-  drawText('TESSA!', sx + 14, t.y - 14, 11, '#FFD700');
-  const bob = Math.sin(Date.now() / 280) * 3;
-  drawText('▼', sx + 14, t.y - 4 + bob, 12, '#FFD700');
+  // Chunky baby legs
+  pixelRect(sx + 5,  by + 38, 10, 10, '#FDDBB4');
+  pixelRect(sx + 16, by + 38, 10, 10, '#FDDBB4');
+  // Little socks (pink)
+  pixelRect(sx + 3,  by + 46, 13, 5,  '#FFB6C1');
+  pixelRect(sx + 15, by + 46, 13, 5,  '#FFB6C1');
+
+  // Diaper
+  pixelRect(sx + 3,  by + 30, 25, 12, '#F0F0F0');
+  pixelRect(sx + 6,  by + 32, 19,  8, '#FFFFFF');
+  pixelRect(sx + 12, by + 31,  7,  2, '#DDDDDD'); // diaper tab
+
+  // Yellow onesie body
+  pixelRect(sx + 4,  by + 16, 23, 16, '#FFE44A');
+  pixelRect(sx + 6,  by + 18, 19, 12, '#FFD700');
+  // Onesie snap at bottom
+  pixelRect(sx + 11, by + 28,  3,  3, '#CCA800');
+  pixelRect(sx + 17, by + 28,  3,  3, '#CCA800');
+
+  // Chubby little arms
+  pixelRect(sx - 3,  by + 18,  8, 10, '#FDDBB4');
+  pixelRect(sx + 26, by + 18,  8, 10, '#FDDBB4');
+  // Pudgy fists
+  pixelRect(sx - 4,  by + 26,  7,  6, '#FDDBB4');
+  pixelRect(sx + 28, by + 26,  7,  6, '#FDDBB4');
+
+  // BIG round baby head (babies have oversized heads)
+  pixelRect(sx,      by,       32, 20, '#FDDBB4');
+  // Chubby cheeks bulging out
+  pixelRect(sx - 3,  by + 5,    6, 10, '#FDDBB4');
+  pixelRect(sx + 29, by + 5,    6, 10, '#FDDBB4');
+  // Rosy cheeks
+  pixelRect(sx + 2,  by + 11,   6,  5, 'rgba(255,130,130,0.45)');
+  pixelRect(sx + 24, by + 11,   6,  5, 'rgba(255,130,130,0.45)');
+
+  // Big sparkly eyes (babies have huge eyes relative to face)
+  // Left eye
+  pixelRect(sx + 5,  by + 6,   9,  9, '#2244AA');
+  pixelRect(sx + 6,  by + 7,   7,  7, '#3355CC');
+  pixelRect(sx + 7,  by + 8,   4,  4, '#111');
+  pixelRect(sx + 5,  by + 6,   9,  2, '#111'); // top lid
+  pixelRect(sx + 10, by + 7,   2,  2, '#fff'); // sparkle
+  pixelRect(sx + 6,  by + 12,  2,  1, '#fff'); // bottom shine
+  // Right eye
+  pixelRect(sx + 18, by + 6,   9,  9, '#2244AA');
+  pixelRect(sx + 19, by + 7,   7,  7, '#3355CC');
+  pixelRect(sx + 20, by + 8,   4,  4, '#111');
+  pixelRect(sx + 18, by + 6,   9,  2, '#111');
+  pixelRect(sx + 23, by + 7,   2,  2, '#fff');
+  pixelRect(sx + 19, by + 12,  2,  1, '#fff');
+
+  // Tiny button nose
+  pixelRect(sx + 14, by + 14,  4,  2, '#e0a090');
+
+  // Big cute smile with little cheek dimples
+  pixelRect(sx + 7,  by + 17, 18,  2, '#c07070');
+  pixelRect(sx + 6,  by + 16,  3,  2, '#c07070'); // left curve
+  pixelRect(sx + 23, by + 16,  3,  2, '#c07070'); // right curve
+
+  // Wispy baby hair (three little tufts)
+  pixelRect(sx + 10, by - 3,   4,  5, '#8B5E3C');
+  pixelRect(sx + 16, by - 5,   4,  7, '#8B5E3C');
+  pixelRect(sx + 22, by - 2,   4,  5, '#8B5E3C');
+  // Hair highlight
+  pixelRect(sx + 17, by - 4,   2,  3, '#B07848');
+
+  // Label + bounce arrow
+  drawText('TESSA!', sx + 14, by - 18, 13, '#FFD700');
+  const bob = Math.sin(Date.now() / 280) * 4;
+  drawText('▼', sx + 14, by - 6 + bob, 14, '#FFD700');
 }
 
 // ─── DRAW PLAYER ─────────────────────────────────────────────────────────────
@@ -748,24 +917,46 @@ function drawProjectiles() {
 }
 
 function drawInsultBubble(cx, ty, text) {
-  ctx.font = 'bold 8px monospace';
+  ctx.font = 'bold 11px monospace';
   const tw = ctx.measureText(text).width;
-  const bx = cx - tw / 2 - 8, by = ty - 34, bw = tw + 16, bh = 20;
-  ctx.fillStyle = '#fff';
+  const pad = 11;
+  const bw = tw + pad * 2, bh = 28;
+  const bx = cx - bw / 2, by = ty - 46;
+
+  // Drop shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect((bx + 3) | 0, (by + 3) | 0, bw | 0, bh);
+
+  // White bubble
+  ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(bx | 0, by | 0, bw | 0, bh);
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 1.5;
+
+  // Red border
+  ctx.strokeStyle = '#CC0000';
+  ctx.lineWidth = 2.5;
   ctx.strokeRect(bx | 0, by | 0, bw | 0, bh);
-  // Tail
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(cx - 4 | 0, by + bh | 0, 8, 6);
-  ctx.fillStyle = '#000';
-  ctx.fillRect(cx - 4 | 0, by + bh | 0, 1.5, 6);
-  ctx.fillRect(cx + 2.5 | 0, by + bh | 0, 1.5, 6);
-  // Text
-  ctx.fillStyle = '#CC0000';
+
+  // Triangle tail (pointing down toward enemy)
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.moveTo((cx - 7) | 0, (by + bh) | 0);
+  ctx.lineTo((cx + 7) | 0, (by + bh) | 0);
+  ctx.lineTo(cx | 0,       (by + bh + 10) | 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#CC0000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo((cx - 7) | 0, (by + bh) | 0);
+  ctx.lineTo(cx | 0,       (by + bh + 10) | 0);
+  ctx.lineTo((cx + 7) | 0, (by + bh) | 0);
+  ctx.stroke();
+
+  // Bold red text
+  ctx.fillStyle = '#AA0000';
+  ctx.font = 'bold 11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(text, cx | 0, (by + 14) | 0);
+  ctx.fillText(text, cx | 0, (by + 19) | 0);
 }
 
 // ─── DRAW HUD ────────────────────────────────────────────────────────────────
@@ -848,9 +1039,7 @@ function drawDayIntro() {
   drawText(DAYS[day], 0, -20, 52, '#FFD700', 'center');
   ctx.restore();
   drawText('Get home to Tessa!', W/2, H/2 + 36, 18, '#fff');
-  if (day === 0) drawText('Good luck on your first day!', W/2, H/2 + 64, 13, '#aaa');
-  else if (day < 4) drawText(`Day ${day+1} of 7 — hang in there!`, W/2, H/2 + 64, 13, '#aaa');
-  else drawText(`Almost the weekend — ${7-day} day${7-day>1?'s':''} left!`, W/2, H/2 + 64, 13, '#aaa');
+  drawText(DAY_THEMES[day].desc, W/2, H/2 + 66, 12, '#aaaaaa');
 }
 
 function drawLevelComplete() {
