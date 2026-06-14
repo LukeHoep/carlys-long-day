@@ -12,7 +12,7 @@
 </head>
 <body>
 <canvas id="game" width="800" height="450"></canvas>
-<div id="info">WASD / Arrows to move &nbsp;|&nbsp; SPACE or W to jump &nbsp;|&nbsp; Jump on Mean Ladies to defeat them</div>
+<div id="info">WASD / Arrows to move &nbsp;|&nbsp; SPACE or W to jump &nbsp;|&nbsp; Jump on enemies to defeat them</div>
 <script>
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const W = 800, H = 450;
@@ -34,90 +34,152 @@ const DAY_THEMES = [
   { sky1:'#180808', sky2:'#2e0e1a', desc:'Thursday. The weekend crowd is warming up early.' },
   { sky1:'#080808', sky2:'#181020', desc:"Friday. They've been drinking since noon." },
   { sky1:'#040a18', sky2:'#081830', desc:'Saturday. Pure chaos. Stay sharp.' },
-  { sky1:'#120606', sky2:'#200808', desc:'Sunday. The longest shift. Get home to Tessa.' },
+  { sky1:'#120606', sky2:'#200808', desc:'Sunday. The longest shift. Mega Karen awaits.' },
 ];
 
 const INSULTS = [
-  "I'VE BEEN WAITING!",
-  "I KNOW THE OWNER!",
-  "SNAP SNAP!",
-  "DO YOU KNOW WHO I AM?",
-  "EXCUSE ME?!",
-  "GET ME YOUR MANAGER!",
-  "THIS IS UNACCEPTABLE!",
-  "I'M A REGULAR!",
-  "WHERE'S MY DRINK?!",
-  "IS THIS YOUR FIRST DAY?!",
-  "I'LL LEAVE A BAD REVIEW!",
-  "SPEAK TO YOUR SUPERIOR!",
-  "THE CUSTOMER IS ALWAYS RIGHT!",
-  "I WANT A DISCOUNT!",
-  "CAN I SPEAK TO SOMEONE ELSE?",
-  "THIS IS EMBARRASSING FOR YOU.",
-  "MY HUSBAND IS A LAWYER.",
+  "I'VE BEEN WAITING!","I KNOW THE OWNER!","SNAP SNAP!",
+  "DO YOU KNOW WHO I AM?","EXCUSE ME?!","GET ME YOUR MANAGER!",
+  "THIS IS UNACCEPTABLE!","I'M A REGULAR!","WHERE'S MY DRINK?!",
+  "IS THIS YOUR FIRST DAY?!","I'LL LEAVE A BAD REVIEW!",
+  "SPEAK TO YOUR SUPERIOR!","THE CUSTOMER IS ALWAYS RIGHT!",
+  "I WANT A DISCOUNT!","MY HUSBAND IS A LAWYER.",
+  "CAN I SPEAK TO SOMEONE ELSE?","THIS IS EMBARRASSING FOR YOU.",
 ];
+
+const BOSS_INSULTS = [
+  "I DEMAND TO SEE THE OWNER!!","I HAVE BEEN COMING HERE FOR YEARS!!!",
+  "THIS IS ABSOLUTELY OUTRAGEOUS!!!","DO YOU KNOW WHO MY FATHER IS?!",
+  "I WILL SHUT THIS PLACE DOWN!!!","YOU WILL REGRET THIS!!!",
+];
+
+// ─── LEADERBOARD ──────────────────────────────────────────────────────────────
+function getLeaderboard() {
+  try { return JSON.parse(localStorage.getItem('carlysLongDayLB') || '[]'); }
+  catch { return []; }
+}
+function saveToLeaderboard(s) {
+  const lb = getLeaderboard();
+  lb.push({ score: s, date: new Date().toLocaleDateString() });
+  lb.sort((a,b) => b.score - a.score);
+  lb.splice(8);
+  localStorage.setItem('carlysLongDayLB', JSON.stringify(lb));
+}
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 const ST = { TITLE:0, INTRO:1, PLAY:2, COMPLETE:3, GAMEOVER:4, WIN:5 };
 let state, day, lives, score, dayScore;
-let player, enemies, collectibles, platforms, bgObjects, tessa, projectiles;
+let player, enemies, collectibles, platforms, bgObjects, tessa, projectiles, boss;
 let levelW, camera;
 let introTimer, completeTimer;
-let jumpPressed = false;
+let scoreSaved = false;
 
-// ─── CANVAS ───────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 // ─── INPUT ────────────────────────────────────────────────────────────────────
 const keys = {};
 document.addEventListener('keydown', e => {
-  if (!keys[e.code]) {
-    keys[e.code] = true;
-    onKeyDown(e.code);
-  }
+  if (!keys[e.code]) { keys[e.code] = true; onKeyDown(e.code); }
   if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
 });
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 
 function onKeyDown(code) {
   const jump = code === 'Space' || code === 'KeyW' || code === 'ArrowUp';
-  if (state === ST.TITLE && (code === 'Space' || code === 'Enter')) { startGame(); return; }
-  if (state === ST.PLAY && jump && player.onGround) { player.vy = JUMP_V; player.onGround = false; }
+  if (state === ST.TITLE    && (code === 'Space' || code === 'Enter')) { startGame(); return; }
+  if (state === ST.PLAY     && jump && player.onGround) { player.vy = JUMP_V; player.onGround = false; }
   if (state === ST.COMPLETE && code === 'Space') { advanceDay(); return; }
   if (state === ST.GAMEOVER && code === 'Space') { state = ST.TITLE; return; }
-  if (state === ST.WIN && code === 'Space') { state = ST.TITLE; return; }
+  if (state === ST.WIN      && code === 'Space') { state = ST.TITLE; return; }
 }
 
-// ─── LEVEL GENERATION ─────────────────────────────────────────────────────────
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
 function rand(a, b) { return a + Math.random() * (b - a); }
 function randInt(a, b) { return Math.floor(rand(a, b)); }
 function pick(arr) { return arr[randInt(0, arr.length)]; }
+function overlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+function pixelRect(x, y, w, h, col) {
+  ctx.fillStyle = col; ctx.fillRect(Math.round(x), Math.round(y), w, h);
+}
+function drawText(text, x, y, size, col, align='center') {
+  ctx.font = `bold ${size}px monospace`; ctx.fillStyle = col;
+  ctx.textAlign = align; ctx.fillText(text, Math.round(x), Math.round(y));
+}
 
+// ─── BUILDING / BACKGROUND ────────────────────────────────────────────────────
 function buildingColor() {
   return pick(['#2a2a4a','#3a2a3a','#1e3a2a','#3a3020','#2a1e3a','#1a2a3a','#3a2010']);
 }
-
 function generateWindows(bw, bh) {
   const wins = [];
-  for (let wy = 12; wy < bh - 20; wy += 24) {
-    for (let wx = 8; wx < bw - 8; wx += 18) {
+  for (let wy = 12; wy < bh - 20; wy += 24)
+    for (let wx = 8; wx < bw - 8; wx += 18)
       if (Math.random() < 0.55) wins.push({ wx, wy, lit: Math.random() < 0.65 });
-    }
-  }
   return wins;
 }
 
+// ─── PLATFORM GROUP BUILDERS ──────────────────────────────────────────────────
+function mkPl(x, y, w, h, color, label) { return { x, y, w, h, color, label }; }
+
+function mkGroupSingle(x) {
+  const defs = [
+    [90, 14, '#6B4423', 'bench'],
+    [96, 44, '#2a5a2a', 'dumpster'],
+    [56, 44, '#8a7040', 'crate'],
+  ];
+  const [w, elev, col, lbl] = pick(defs);
+  return [mkPl(x, GROUND_Y - elev, w, elev, col, lbl)];
+}
+
+function mkGroupStepUp(x) {
+  const stepW = pick([80, 96, 64]);
+  return [
+    mkPl(x,              GROUND_Y - 44, stepW, 44, '#2a5a2a', 'dumpster'),
+    mkPl(x + stepW + 70, GROUND_Y - 100, 110, 10, '#882200', 'awning'),
+  ];
+}
+
+function mkGroupStaircase(x) {
+  return [
+    mkPl(x,       GROUND_Y - 44,  80,  44, '#2a5a2a', 'dumpster'),
+    mkPl(x + 110, GROUND_Y - 90,  90,  10, '#882200', 'awning'),
+    mkPl(x + 230, GROUND_Y - 140, 110, 10, '#aa3300', 'awning'),
+  ];
+}
+
+function mkGroupAwning(x) {
+  return [
+    mkPl(x - 5,  GROUND_Y - 44,  84, 44, '#8a7040', 'crate'),
+    mkPl(x - 20, GROUND_Y - 135, 130, 10, '#882200', 'awning'),
+  ];
+}
+
+function mkGroupTower(x) {
+  return [
+    mkPl(x,      GROUND_Y - 44,  96,  44, '#2a5a2a', 'dumpster'),
+    mkPl(x + 10, GROUND_Y - 94,  76,  10, '#8a7040', 'crate'),
+    mkPl(x - 20, GROUND_Y - 150, 140, 10, '#882200', 'awning'),
+  ];
+}
+
+// ─── ITEM PLACEMENT HELPER ────────────────────────────────────────────────────
+// Returns true if a collectible at (cx, cy) would be inside any platform body.
+function itemClearOfPlatforms(cx, cy, allPlats) {
+  const box = { x: cx - 2, y: cy - 2, w: 20, h: 22 };
+  return !allPlats.some(pl => overlap(box, pl));
+}
+
+// ─── LEVEL GENERATION ─────────────────────────────────────────────────────────
 function generateLevel(d) {
   levelW = 3200 + d * 600;
   camera = 0;
-  platforms = [];
-  enemies = [];
-  collectibles = [];
-  projectiles = [];
-  bgObjects = [];
+  platforms = []; enemies = []; collectibles = []; projectiles = [];
+  bgObjects = []; boss = null;
 
-  // Background buildings + streetlights
+  // Background
   let bx = 0;
   while (bx < levelW) {
     if (Math.random() < 0.25) {
@@ -125,150 +187,106 @@ function generateLevel(d) {
       bx += randInt(100, 180);
     } else {
       const bw = randInt(70, 140), bh = randInt(100, 220);
-      bgObjects.push({ type: 'building', x: bx, w: bw, h: bh, color: buildingColor(), wins: generateWindows(bw, bh) });
+      bgObjects.push({ type:'building', x:bx, w:bw, h:bh, color:buildingColor(), wins:generateWindows(bw,bh) });
       bx += bw + randInt(10, 40);
     }
   }
 
-  // ─── PLATFORM GROUPS (progressive by day) ────────────────────────────────────
-  // d0: mostly singles           d4: full complexity, tighter gaps
-  // d1: singles + stepUps        d5: all types, lots of towers
-  // d2: + staircases             d6: max density, short gaps
-  // d3: + awnings & towers
-
-  const highPlatforms = [];
-  let px = 420;
+  // Platforms — progressive groups
+  const highPlats = [];
+  let px = 450;
   const numGroups = 8 + d * 3;
 
   for (let g = 0; g < numGroups; g++) {
-    if (px > levelW - 400) break;
+    if (px > levelW - 500) break;
     const t = Math.random();
     let group;
-
     if (d === 0) {
       group = t < 0.75 ? mkGroupSingle(px) : mkGroupStepUp(px);
     } else if (d === 1) {
-      if (t < 0.35) group = mkGroupSingle(px);
-      else if (t < 0.75) group = mkGroupStepUp(px);
-      else group = mkGroupStaircase(px);
+      group = t < 0.35 ? mkGroupSingle(px) : t < 0.75 ? mkGroupStepUp(px) : mkGroupStaircase(px);
     } else if (d === 2) {
-      if (t < 0.15) group = mkGroupSingle(px);
-      else if (t < 0.45) group = mkGroupStepUp(px);
-      else if (t < 0.75) group = mkGroupStaircase(px);
-      else group = mkGroupAwning(px);
+      group = t < 0.15 ? mkGroupSingle(px) : t < 0.45 ? mkGroupStepUp(px) : t < 0.75 ? mkGroupStaircase(px) : mkGroupAwning(px);
     } else if (d === 3) {
-      if (t < 0.10) group = mkGroupSingle(px);
-      else if (t < 0.30) group = mkGroupStepUp(px);
-      else if (t < 0.55) group = mkGroupStaircase(px);
-      else if (t < 0.78) group = mkGroupAwning(px);
-      else group = mkGroupTower(px);
+      group = t < 0.10 ? mkGroupSingle(px) : t < 0.30 ? mkGroupStepUp(px) : t < 0.55 ? mkGroupStaircase(px) : t < 0.78 ? mkGroupAwning(px) : mkGroupTower(px);
     } else {
-      if (t < 0.05) group = mkGroupSingle(px);
-      else if (t < 0.20) group = mkGroupStepUp(px);
-      else if (t < 0.42) group = mkGroupStaircase(px);
-      else if (t < 0.68) group = mkGroupAwning(px);
-      else group = mkGroupTower(px);
+      group = t < 0.05 ? mkGroupSingle(px) : t < 0.20 ? mkGroupStepUp(px) : t < 0.42 ? mkGroupStaircase(px) : t < 0.65 ? mkGroupAwning(px) : mkGroupTower(px);
     }
 
     for (const pl of group) {
       platforms.push(pl);
-      if (pl.y < GROUND_Y - 60) highPlatforms.push(pl);
+      if (pl.y < GROUND_Y - 70) highPlats.push(pl);
     }
-
     const rightmost = Math.max(...group.map(p => p.x + p.w));
-    const minGap = Math.max(45, 110 - d * 10);
-    const maxGap = Math.max(90, 200 - d * 14);
-    px = rightmost + randInt(minGap, maxGap);
+    px = rightmost + randInt(Math.max(140, 200 - d * 8), Math.max(200, 300 - d * 10));
   }
 
-  // ─── ENEMIES ──────────────────────────────────────────────────────────────────
+  // Enemies
   const numEnemies = 2 + Math.floor(d * 1.5);
   const speed = 1.0 + d * 0.25;
   for (let i = 0; i < numEnemies; i++) {
-    const ex = 600 + (i / numEnemies) * (levelW - 800);
+    const ex = 600 + (i / numEnemies) * (levelW - (d === 6 ? 1400 : 900));
     enemies.push(mkEnemy(ex, speed));
   }
 
-  // ─── COLLECTIBLES ─────────────────────────────────────────────────────────────
-  // 40% more wine, 70% less reeses. Wines primarily on elevated platforms.
+  // Boss arena for Sunday (day 6)
+  if (d === 6) {
+    const arenaX = levelW - 1100;
+    boss = mkBoss(arenaX + 300);
+    // Arena platforms for jumping onto boss head (boss is 120px tall, head at top)
+    platforms.push(mkPl(arenaX,       GROUND_Y - 44,  100, 44, '#2a5a2a', 'dumpster'));
+    platforms.push(mkPl(arenaX + 160, GROUND_Y - 90,  90,  10, '#882200', 'awning'));
+    platforms.push(mkPl(arenaX + 440, GROUND_Y - 44,  100, 44, '#2a5a2a', 'dumpster'));
+    platforms.push(mkPl(arenaX + 550, GROUND_Y - 90,  90,  10, '#882200', 'awning'));
+    platforms.push(mkPl(arenaX + 200, GROUND_Y - 150, 120, 10, '#aa2200', 'awning'));
+    platforms.push(mkPl(arenaX + 380, GROUND_Y - 150, 120, 10, '#aa2200', 'awning'));
+  }
+
+  // Collectibles — wines on platforms and high spots, reeses rare on ground
   const numWine = 14 + d * 4;
   const numReeses = Math.max(1, 2 - Math.floor(d * 0.4));
 
-  const shuffledPlats = [...platforms].sort(() => Math.random() - 0.5);
-  const wineOnPlats = Math.round(numWine * 0.75);
-  const wineOnGround = numWine - wineOnPlats;
+  // 75% of wine on platforms, preferring high ones
+  const shuffled = [...platforms].filter(p => p.w >= 40).sort(() => Math.random() - 0.5);
+  let wineCount = 0;
 
-  for (let i = 0; i < wineOnPlats; i++) {
-    const pl = shuffledPlats[i % shuffledPlats.length];
-    const cx = pl.x + randInt(4, Math.max(5, pl.w - 4));
-    collectibles.push({ x: cx, y: pl.y - 20, type: 'wine', collected: false });
+  // Wine on regular platforms (spaced out, one per platform)
+  for (const pl of shuffled) {
+    if (wineCount >= Math.round(numWine * 0.55)) break;
+    const cx = pl.x + randInt(10, Math.max(11, pl.w - 10));
+    const cy = pl.y - 26;
+    if (itemClearOfPlatforms(cx, cy, platforms))
+      collectibles.push({ x: cx, y: cy, type: 'wine', collected: false });
+    wineCount++;
   }
-  // Extra wine on every high platform (reward for climbing)
-  for (const hp of highPlatforms) {
-    if (Math.random() < 0.88)
-      collectibles.push({ x: hp.x + hp.w / 2, y: hp.y - 20, type: 'wine', collected: false });
+  // Extra wine on every high platform (the reward for climbing)
+  for (const hp of highPlats) {
+    if (hp.w < 40) continue;
+    const cx = hp.x + hp.w / 2;
+    const cy = hp.y - 26;
+    if (itemClearOfPlatforms(cx, cy, platforms))
+      collectibles.push({ x: cx, y: cy, type: 'wine', collected: false });
+    wineCount++;
   }
-  for (let i = 0; i < wineOnGround; i++)
-    collectibles.push({ x: 300 + Math.random() * (levelW - 500), y: GROUND_Y - 20, type: 'wine', collected: false });
+  // Remaining wine on ground (25%)
+  const groundWine = Math.max(0, numWine - wineCount);
+  for (let i = 0; i < groundWine; i++) {
+    const cx = 300 + Math.random() * (levelW - (d === 6 ? 1500 : 600));
+    const cy = GROUND_Y - 26;
+    if (itemClearOfPlatforms(cx, cy, platforms))
+      collectibles.push({ x: cx, y: cy, type: 'wine', collected: false });
+  }
 
-  // Reeses are rare and on the ground
-  for (let i = 0; i < numReeses; i++)
-    collectibles.push({ x: 400 + Math.random() * (levelW - 600), y: GROUND_Y - 18, type: 'reeses', collected: false });
+  // Reeses on ground
+  for (let i = 0; i < numReeses; i++) {
+    const cx = 400 + Math.random() * (levelW - (d === 6 ? 1600 : 700));
+    collectibles.push({ x: cx, y: GROUND_Y - 26, type: 'reeses', collected: false });
+  }
 
-  tessa = { x: levelW - 160, y: GROUND_Y - 52, w: 28, h: 52 };
+  tessa = { x: levelW - 150, y: GROUND_Y - 52, w: 28, h: 52 };
 }
 
-// ─── PLATFORM GROUP BUILDERS ─────────────────────────────────────────────────
-function mkPl(x, y, w, h, color, label) { return { x, y, w, h, color, label }; }
-
-function mkGroupSingle(x) {
-  const defs = [
-    [90, 14, '#6B4423', 'bench'],
-    [96, 44, '#2a5a2a', 'dumpster'],
-    [52, 44, '#8a7040', 'crate'],
-    [22, 34, '#cc2222', 'hydrant'],
-  ];
-  const [w, elev, col, lbl] = pick(defs);
-  return [mkPl(x, GROUND_Y - elev, w, elev, col, lbl)];
-}
-
-function mkGroupStepUp(x) {
-  // Low obstacle → high awning (jump on box, then leap to awning)
-  const stepW = pick([80, 96, 64]);
-  const stepElev = pick([44, 34]);
-  const gap = randInt(50, 90);
-  return [
-    mkPl(x,                 GROUND_Y - stepElev, stepW, stepElev, '#2a5a2a', 'dumpster'),
-    mkPl(x + stepW + gap,   GROUND_Y - 100,      110,  10,        '#882200', 'awning'),
-  ];
-}
-
-function mkGroupStaircase(x) {
-  // Three ascending steps — low dumpster → mid awning → high awning
-  return [
-    mkPl(x,       GROUND_Y - 44,  80,  44, '#2a5a2a', 'dumpster'),
-    mkPl(x + 100, GROUND_Y - 85,  90,  10, '#882200', 'awning'),
-    mkPl(x + 210, GROUND_Y - 135, 110, 10, '#aa3300', 'awning'),
-  ];
-}
-
-function mkGroupAwning(x) {
-  // Crate with a high awning directly above — must land on crate first
-  return [
-    mkPl(x - 5,  GROUND_Y - 44,  84,  44, '#8a7040', 'crate'),
-    mkPl(x - 20, GROUND_Y - 130, 128, 10, '#882200', 'awning'),
-  ];
-}
-
-function mkGroupTower(x) {
-  // Dumpster → floating shelf → high awning: three-tier stack
-  return [
-    mkPl(x,      GROUND_Y - 44,  96,  44, '#2a5a2a', 'dumpster'),
-    mkPl(x + 8,  GROUND_Y - 92,  80,  10, '#8a7040', 'crate'),
-    mkPl(x - 18, GROUND_Y - 148, 140, 10, '#882200', 'awning'),
-  ];
-}
-
+// ─── ENTITY FACTORIES ─────────────────────────────────────────────────────────
 function mkEnemy(x, speed) {
   return {
     x, y: GROUND_Y - 48, w: 24, h: 48,
@@ -283,209 +301,212 @@ function mkEnemy(x, speed) {
   };
 }
 
+function mkBoss(x) {
+  return {
+    x, y: GROUND_Y - 120, w: 60, h: 120,
+    hp: 8, maxHp: 8,
+    speed: 1.4, vx: 1.4,
+    patrolL: x - 280, patrolR: x + 280,
+    mode: 'patrol',
+    insult: null, insultTimer: 0, insultCooldown: 70,
+    defeated: false, defeatTimer: 0,
+    invFrames: 0,
+    animF: 0, animT: 0, facingR: true,
+  };
+}
+
 function mkPlayer() {
   return {
     x: 80, y: GROUND_Y - 48, w: 24, h: 48,
-    vx: 0, vy: 0,
-    onGround: false,
-    health: HEALTH_MAX,
-    invFrames: 0,
-    facingR: true,
-    animF: 0, animT: 0,
+    vx: 0, vy: 0, onGround: false,
+    health: HEALTH_MAX, invFrames: 0,
+    facingR: true, animF: 0, animT: 0,
   };
 }
 
 // ─── GAME FLOW ────────────────────────────────────────────────────────────────
 function startGame() {
-  lives = 3; score = 0; day = 0;
+  lives = 3; score = 0; day = 0; scoreSaved = false;
   beginDay();
 }
-
 function beginDay() {
-  dayScore = 0;
-  player = mkPlayer();
-  generateLevel(day);
-  state = ST.INTRO;
-  introTimer = 150;
+  dayScore = 0; player = mkPlayer();
+  generateLevel(day); state = ST.INTRO; introTimer = 150;
 }
-
 function restartDay() {
-  player = mkPlayer();
-  generateLevel(day);
-  state = ST.INTRO;
-  introTimer = 100;
+  player = mkPlayer(); generateLevel(day); state = ST.INTRO; introTimer = 100;
 }
-
 function advanceDay() {
-  score += dayScore;
-  day++;
-  if (day >= 7) { state = ST.WIN; } else { beginDay(); }
-}
-
-// ─── COLLISION ────────────────────────────────────────────────────────────────
-function overlap(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  score += dayScore; day++;
+  if (day >= 7) {
+    if (!scoreSaved) { saveToLeaderboard(score); scoreSaved = true; }
+    state = ST.WIN;
+  } else { beginDay(); }
 }
 
 // ─── UPDATE ───────────────────────────────────────────────────────────────────
 function update() {
-  if (state === ST.INTRO) {
-    if (--introTimer <= 0) state = ST.PLAY;
-    return;
-  }
-  if (state === ST.COMPLETE) {
-    if (--completeTimer <= 0) advanceDay();
-    return;
-  }
+  if (state === ST.INTRO)    { if (--introTimer <= 0) state = ST.PLAY; return; }
+  if (state === ST.COMPLETE) { if (--completeTimer <= 0) advanceDay(); return; }
   if (state !== ST.PLAY) return;
-
   updatePlayer();
   updateEnemies();
+  updateBoss();
   updateProjectiles();
   updateCollectibles();
   updateCamera();
   checkTessa();
 }
 
+function applyPlatformCollision(entity) {
+  if (entity.y + entity.h > GROUND_Y) { entity.y = GROUND_Y - entity.h; entity.vy = 0; entity.onGround = true; }
+  for (const pl of platforms) {
+    if (!overlap(entity, pl)) continue;
+    const prevBottom = entity.y + entity.h - entity.vy;
+    const prevLeft   = entity.x - (entity.vx || 0);
+    const prevRight  = entity.x + entity.w - (entity.vx || 0);
+    if ((entity.vy||0) >= 0 && prevBottom <= pl.y + 4) {
+      entity.y = pl.y - entity.h; entity.vy = 0; entity.onGround = true;
+    } else if ((entity.vy||0) < 0 && entity.y - (entity.vy||0) >= pl.y + pl.h - 4) {
+      entity.y = pl.y + pl.h; entity.vy = 0;
+    } else if (prevRight <= pl.x + 6) {
+      entity.x = pl.x - entity.w;
+      if (entity.vx !== undefined) entity.vx = Math.abs(entity.vx);
+    } else if (prevLeft >= pl.x + pl.w - 6) {
+      entity.x = pl.x + pl.w;
+      if (entity.vx !== undefined) entity.vx = -Math.abs(entity.vx);
+    }
+  }
+}
+
 function updatePlayer() {
   const p = player;
-
-  if (keys['KeyA'] || keys['ArrowLeft'])  { p.vx = -PLAYER_SPD; p.facingR = false; }
-  else if (keys['KeyD'] || keys['ArrowRight']) { p.vx = PLAYER_SPD; p.facingR = true; }
+  if (keys['KeyA'] || keys['ArrowLeft'])       { p.vx = -PLAYER_SPD; p.facingR = false; }
+  else if (keys['KeyD'] || keys['ArrowRight']) { p.vx = PLAYER_SPD;  p.facingR = true;  }
   else p.vx *= 0.7;
 
-  p.vy += GRAVITY;
-  p.x += p.vx;
-  p.y += p.vy;
+  p.vy += GRAVITY; p.x += p.vx; p.y += p.vy;
   if (p.x < 0) p.x = 0;
   if (p.x + p.w > levelW) p.x = levelW - p.w;
 
-  // Ground
   p.onGround = false;
-  if (p.y + p.h >= GROUND_Y) { p.y = GROUND_Y - p.h; p.vy = 0; p.onGround = true; }
-
-  // Platforms
-  for (const pl of platforms) {
-    if (!overlap(p, pl)) continue;
-    const prevBottom = p.y + p.h - p.vy;
-    const prevRight  = p.x + p.w - p.vx;
-    const prevLeft   = p.x - p.vx;
-    if (p.vy >= 0 && prevBottom <= pl.y + 4) {
-      p.y = pl.y - p.h; p.vy = 0; p.onGround = true;
-    } else if (p.vy < 0 && p.y - p.vy >= pl.y + pl.h - 4) {
-      p.y = pl.y + pl.h; p.vy = 0;
-    } else if (prevRight <= pl.x + 6) {
-      p.x = pl.x - p.w;
-    } else if (prevLeft >= pl.x + pl.w - 6) {
-      p.x = pl.x + pl.w;
-    }
-  }
-
+  applyPlatformCollision(p);
   if (p.invFrames > 0) p.invFrames--;
-
-  // Animate
   if (++p.animT > 7) { p.animT = 0; p.animF = (p.animF + 1) % 2; }
 }
 
 function updateEnemies() {
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
-
     if (e.stomped) {
-      if (--e.stompTimer <= 0) { score += 100; dayScore += 100; enemies.splice(i, 1); }
+      if (--e.stompTimer <= 0) enemies.splice(i, 1);
       continue;
     }
-
-    // Patrol / chase
     const dx = (player.x + player.w/2) - (e.x + e.w/2);
     const dist = Math.abs(dx);
     if (dist < CHASE_RANGE) e.mode = 'chase';
     else if (dist > CHASE_RANGE + 150) e.mode = 'patrol';
 
-    if (e.mode === 'chase') {
-      const dir = dx > 0 ? 1 : -1;
-      e.x += e.speed * 1.6 * dir;
-      e.facingR = dir > 0;
-    } else {
-      e.x += e.vx;
-      e.facingR = e.vx > 0;
-      if (e.x < e.patrolL || e.x > e.patrolR) e.vx *= -1;
-    }
+    if (e.mode === 'chase') { const dir = dx > 0 ? 1 : -1; e.x += e.speed * 1.6 * dir; e.facingR = dir > 0; }
+    else { e.x += e.vx; e.facingR = e.vx > 0; if (e.x < e.patrolL || e.x > e.patrolR) e.vx *= -1; }
 
     if (e.y + e.h > GROUND_Y) e.y = GROUND_Y - e.h;
-
-    // Platform collision — enemies are blocked by ground-level obstacles
+    // Block by ground-level platforms
     for (const pl of platforms) {
-      if (pl.y + pl.h < GROUND_Y - 5) continue; // floating platform, skip
+      if (pl.y + pl.h < GROUND_Y - 5) continue;
       if (!overlap(e, pl)) continue;
-      if (e.x + e.w / 2 < pl.x + pl.w / 2) {
-        e.x = pl.x - e.w;
-        e.vx = Math.abs(e.vx);   // bounce right
-      } else {
-        e.x = pl.x + pl.w;
-        e.vx = -Math.abs(e.vx);  // bounce left
-      }
+      if (e.x + e.w / 2 < pl.x + pl.w / 2) { e.x = pl.x - e.w; e.vx = Math.abs(e.vx); }
+      else { e.x = pl.x + pl.w; e.vx = -Math.abs(e.vx); }
     }
 
-    // Insults + throw projectile
-    if (e.mode === 'chase') {
-      if (--e.insultCooldown <= 0) {
-        e.insult = pick(INSULTS);
-        e.insultTimer = 130;
-        e.insultCooldown = randInt(140, 220);
-        const dir = player.x > e.x ? 1 : -1;
-        projectiles.push({
-          x: e.x + (dir > 0 ? e.w + 2 : -2),
-          y: GROUND_Y - 34,
-          vx: dir * (4 + day * 0.3),
-          spin: 0,
-          type: pick(['purse','phone','glass']),
-        });
-      }
+    if (e.mode === 'chase' && --e.insultCooldown <= 0) {
+      e.insult = pick(INSULTS); e.insultTimer = 130;
+      e.insultCooldown = randInt(140, 220);
+      const dir = player.x > e.x ? 1 : -1;
+      projectiles.push({ x: e.x + (dir > 0 ? e.w + 2 : -2), y: GROUND_Y - 34, vx: dir * (4 + day * 0.3), spin: 0, type: pick(['purse','phone','glass']) });
     }
-    if (e.insultTimer > 0) { if (--e.insultTimer === 0) e.insult = null; }
+    if (e.insultTimer > 0 && --e.insultTimer === 0) e.insult = null;
 
-    // Stomp / side hit
     if (overlap(player, e)) {
-      const prevBottom = player.y + player.h - player.vy;
-      if (player.vy > 0 && prevBottom <= e.y + 10) {
-        e.stomped = true; e.stompTimer = 28;
-        player.vy = -9;
-        score += 50; dayScore += 50;
-      } else {
-        takeDamage(TOUCH_DMG);
-      }
+      if (player.vy > 0 && player.y + player.h - player.vy <= e.y + 10) {
+        e.stomped = true; e.stompTimer = 28; player.vy = -9;
+        const pts = 150; score += pts; dayScore += pts;
+      } else { takeDamage(TOUCH_DMG); }
     }
-
-    // Animate
     if (++e.animT > 7) { e.animT = 0; e.animF = (e.animF + 1) % 2; }
   }
+}
+
+function updateBoss() {
+  if (!boss) return;
+  if (boss.defeated) {
+    boss.defeatTimer++;
+    return;
+  }
+
+  const dx = (player.x + player.w/2) - (boss.x + boss.w/2);
+  const dist = Math.abs(dx);
+  if (dist < 350) boss.mode = 'chase'; else if (dist > 500) boss.mode = 'patrol';
+
+  if (boss.mode === 'chase') { const dir = dx > 0 ? 1 : -1; boss.x += boss.speed * 1.5 * dir; boss.facingR = dir > 0; }
+  else { boss.x += boss.vx; boss.facingR = boss.vx > 0; if (boss.x < boss.patrolL || boss.x > boss.patrolR) boss.vx *= -1; }
+
+  if (boss.x < 0) boss.x = 0;
+  if (boss.y + boss.h > GROUND_Y) boss.y = GROUND_Y - boss.h;
+
+  if (boss.invFrames > 0) boss.invFrames--;
+
+  // Boss throws projectiles frequently
+  if (boss.mode === 'chase' && --boss.insultCooldown <= 0) {
+    boss.insult = pick(BOSS_INSULTS); boss.insultTimer = 150;
+    boss.insultCooldown = randInt(70, 110);
+    const dir = player.x > boss.x ? 1 : -1;
+    // Boss throws 2 projectiles at slightly different heights
+    projectiles.push({ x: boss.x + (dir > 0 ? boss.w + 2 : -2), y: GROUND_Y - 40, vx: dir * 6, spin: 0, type: 'glass' });
+    projectiles.push({ x: boss.x + (dir > 0 ? boss.w + 2 : -2), y: GROUND_Y - 80, vx: dir * 5, spin: 0, type: 'purse' });
+  }
+  if (boss.insultTimer > 0 && --boss.insultTimer === 0) boss.insult = null;
+
+  // Check player stomp on boss HEAD (top 30px)
+  if (boss.invFrames === 0 && overlap(player, { x: boss.x, y: boss.y, w: boss.w, h: 35 })) {
+    if (player.vy > 0 && player.y + player.h - player.vy <= boss.y + 30) {
+      boss.hp--;
+      boss.invFrames = 90;
+      player.vy = -12;
+      const pts = 200; score += pts; dayScore += pts;
+      if (boss.hp <= 0) { boss.defeated = true; boss.defeatTimer = 0; }
+    }
+  }
+  // Boss body collision (sides only)
+  if (overlap(player, boss)) {
+    if (!(player.vy > 0 && player.y + player.h - player.vy <= boss.y + 30)) {
+      takeDamage(TOUCH_DMG);
+    }
+  }
+
+  if (++boss.animT > 8) { boss.animT = 0; boss.animF = (boss.animF + 1) % 2; }
 }
 
 function takeDamage(amt) {
   if (player.invFrames > 0) return;
   player.health -= amt;
   player.invFrames = 80;
+  score = Math.max(0, score - 5);
+  dayScore = Math.max(0, dayScore - 5);
   if (player.health <= 0) {
-    player.health = 0;
-    lives--;
+    player.health = 0; lives--;
     if (lives <= 0) { lives = 0; state = ST.GAMEOVER; }
-    else { restartDay(); }
+    else restartDay();
   }
 }
 
 function updateProjectiles() {
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
-    p.x += p.vx;
-    p.spin += 0.18;
-    if (p.x < camera - 80 || p.x > camera + W + 80) {
-      projectiles.splice(i, 1);
-      continue;
-    }
+    p.x += p.vx; p.spin += 0.18;
+    if (p.x < camera - 80 || p.x > camera + W + 80) { projectiles.splice(i, 1); continue; }
     if (overlap({ x: p.x - 7, y: p.y - 7, w: 14, h: 14 }, player)) {
-      takeDamage(INSULT_DMG);
-      projectiles.splice(i, 1);
+      takeDamage(INSULT_DMG); projectiles.splice(i, 1);
     }
   }
 }
@@ -496,10 +517,10 @@ function updateCollectibles() {
     if (overlap(player, { x: c.x - 6, y: c.y - 6, w: 28, h: 32 })) {
       c.collected = true;
       if (c.type === 'wine') {
-        const pts = 10;
-        score += pts; dayScore += pts;
+        score += 10; dayScore += 10;
       } else {
         player.health = Math.min(HEALTH_MAX, player.health + 30);
+        score += 25; dayScore += 25;
       }
     }
   }
@@ -511,93 +532,58 @@ function updateCamera() {
 }
 
 function checkTessa() {
-  if (overlap(player, tessa)) {
-    state = ST.COMPLETE;
-    completeTimer = 210;
-  }
-}
-
-// ─── DRAW HELPERS ─────────────────────────────────────────────────────────────
-function pixelRect(x, y, w, h, col) {
-  ctx.fillStyle = col;
-  ctx.fillRect(Math.round(x), Math.round(y), w, h);
-}
-
-function drawText(text, x, y, size, col, align='center') {
-  ctx.font = `bold ${size}px monospace`;
-  ctx.fillStyle = col;
-  ctx.textAlign = align;
-  ctx.fillText(text, Math.round(x), Math.round(y));
+  // On Sunday, must defeat boss first
+  if (day === 6 && boss && !boss.defeated) return;
+  if (overlap(player, tessa)) { state = ST.COMPLETE; completeTimer = 210; }
 }
 
 // ─── DRAW BACKGROUND ─────────────────────────────────────────────────────────
 function drawBackground() {
-  // Sky — distinct per day
   const theme = DAY_THEMES[day];
   const g = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
-  g.addColorStop(0, theme.sky1);
-  g.addColorStop(1, theme.sky2);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, GROUND_Y);
+  g.addColorStop(0, theme.sky1); g.addColorStop(1, theme.sky2);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, GROUND_Y);
 
-  // Stars (fixed seed based on day)
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = '#fff';
   for (let i = 0; i < 60; i++) {
     const sx = ((i * 173 + day * 37) % levelW) - camera;
     const sy = (i * 59 + day * 13) % 160;
-    if (sx >= 0 && sx <= W) ctx.fillRect(sx | 0, sy | 0, 2, 2);
+    if (sx >= 0 && sx <= W) ctx.fillRect(sx|0, sy|0, 2, 2);
   }
-
-  // Moon
   const moonX = (levelW * 0.1 - camera + W * 0.7) % (W * 1.5) - W * 0.25;
   ctx.fillStyle = '#FFFACD';
-  ctx.beginPath();
-  ctx.arc(moonX, 55, 22, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#1a0e2e';
-  ctx.beginPath();
-  ctx.arc(moonX + 8, 50, 18, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(moonX, 55, 22, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = theme.sky1;
+  ctx.beginPath(); ctx.arc(moonX + 8, 50, 18, 0, Math.PI * 2); ctx.fill();
 
-  // Buildings + streetlights
   for (const obj of bgObjects) {
     const sx = obj.x - camera;
     if (sx + (obj.w || 20) < 0 || sx > W) continue;
-
     if (obj.type === 'building') {
       pixelRect(sx, GROUND_Y - obj.h, obj.w, obj.h, obj.color);
-      // Window trim
       pixelRect(sx, GROUND_Y - obj.h, obj.w, 4, 'rgba(255,255,255,0.08)');
       for (const win of obj.wins) {
         ctx.fillStyle = win.lit ? '#FFFAAA' : '#111';
-        ctx.fillRect(sx + win.wx | 0, GROUND_Y - obj.h + win.wy | 0, 7, 9);
+        ctx.fillRect(sx + win.wx|0, GROUND_Y - obj.h + win.wy|0, 7, 9);
       }
     } else {
-      // Streetlight
       pixelRect(sx + 3, GROUND_Y - 75, 4, 75, '#777');
       pixelRect(sx - 2, GROUND_Y - 78, 14, 5, '#999');
       ctx.fillStyle = 'rgba(255,255,160,0.25)';
-      ctx.beginPath();
-      ctx.arc(sx + 5, GROUND_Y - 72, 22, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(sx + 5, GROUND_Y - 72, 22, 0, Math.PI * 2); ctx.fill();
       pixelRect(sx, GROUND_Y - 79, 10, 5, '#FFFF99');
     }
   }
 }
 
 function drawGround() {
-  // Sidewalk
   pixelRect(0, GROUND_Y, W, H - GROUND_Y, '#8a8e8e');
   pixelRect(0, GROUND_Y, W, 3, '#555');
   ctx.fillStyle = '#767b7b';
-  for (let x = (-camera % 64 + 64) % 64; x < W; x += 64) {
-    ctx.fillRect(x | 0, GROUND_Y, 2, H - GROUND_Y);
-  }
-  // Curb edge
+  for (let x = (-camera % 64 + 64) % 64; x < W; x += 64) ctx.fillRect(x|0, GROUND_Y, 2, H - GROUND_Y);
   pixelRect(0, GROUND_Y + 3, W, 6, '#999');
 }
 
-// ─── DRAW PLATFORMS ───────────────────────────────────────────────────────────
 function drawPlatforms() {
   for (const p of platforms) {
     const sx = p.x - camera;
@@ -605,24 +591,18 @@ function drawPlatforms() {
     pixelRect(sx, p.y, p.w, p.h, p.color);
     pixelRect(sx, p.y, p.w, 3, 'rgba(255,255,255,0.18)');
     pixelRect(sx, p.y + p.h - 3, p.w, 3, 'rgba(0,0,0,0.3)');
-
-    // Simple label detail
     if (p.label === 'dumpster') {
       pixelRect(sx + 4, p.y + 6, p.w - 8, 4, '#1a3a1a');
-      pixelRect(sx + 4, p.y + 14, p.w - 8, 4, '#1a3a1a');
-    } else if (p.label === 'hydrant') {
-      pixelRect(sx + 6, p.y + 4, 10, 6, '#aa1111');
-      pixelRect(sx + 8, p.y - 4, 6, 8, '#cc2222');
+      pixelRect(sx + 4, p.y + 16, p.w - 8, 4, '#1a3a1a');
     } else if (p.label === 'awning') {
       for (let s = 0; s < p.w; s += 16) {
         ctx.fillStyle = s % 32 === 0 ? '#aa3300' : '#cc4422';
-        ctx.fillRect(sx + s | 0, p.y | 0, 16, p.h);
+        ctx.fillRect(sx + s|0, p.y|0, 16, p.h);
       }
     }
   }
 }
 
-// ─── DRAW COLLECTIBLES ────────────────────────────────────────────────────────
 function drawCollectibles() {
   for (const c of collectibles) {
     if (c.collected) continue;
@@ -634,18 +614,12 @@ function drawCollectibles() {
 }
 
 function drawWineGlass(x, y) {
-  // Bowl
   pixelRect(x + 2, y, 12, 9, '#DD99CC');
-  // Wine fill
   pixelRect(x + 3, y + 1, 10, 6, '#881133');
-  // Stem
   pixelRect(x + 7, y + 9, 2, 7, '#CC88BB');
-  // Base
   pixelRect(x + 2, y + 16, 12, 2, '#CC88BB');
-  // Shine
   pixelRect(x + 3, y + 1, 2, 4, 'rgba(255,255,255,0.4)');
 }
-
 function drawReeses(x, y) {
   pixelRect(x, y + 2, 18, 14, '#D4540A');
   pixelRect(x + 2, y + 4, 14, 10, '#B03A00');
@@ -654,155 +628,95 @@ function drawReeses(x, y) {
 }
 
 // ─── DRAW TESSA ───────────────────────────────────────────────────────────────
-function drawTessa() {
+function drawTessa(sx, ty, flip) {
+  if (day === 6 && boss && !boss.defeated) return;
   const t = tessa;
-  const sx = t.x - camera;
-  if (sx < -60 || sx > W + 60) return;
+  if (!sx) {
+    sx = t.x - camera;
+    if (sx < -60 || sx > W + 60) return;
+  }
+  ty = ty || t.y;
+  const by = ty + 4;
 
-  // Warm glow
-  const glow = ctx.createRadialGradient(sx + 14, t.y + 28, 4, sx + 14, t.y + 28, 46);
-  glow.addColorStop(0, 'rgba(255,230,120,0.22)');
-  glow.addColorStop(1, 'rgba(255,200,80,0)');
+  const glow = ctx.createRadialGradient(sx + 14, by + 28, 4, sx + 14, by + 28, 46);
+  glow.addColorStop(0, 'rgba(255,230,120,0.22)'); glow.addColorStop(1, 'rgba(255,200,80,0)');
   ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.arc(sx + 14, t.y + 28, 46, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(sx + 14, by + 28, 46, 0, Math.PI * 2); ctx.fill();
 
-  const by = t.y + 4; // baseline offset
+  ctx.save();
+  if (flip) { ctx.scale(-1,1); ctx.translate(-(sx*2+28), 0); }
 
-  // Chunky baby legs
   pixelRect(sx + 5,  by + 38, 10, 10, '#FDDBB4');
   pixelRect(sx + 16, by + 38, 10, 10, '#FDDBB4');
-  // Little socks (pink)
-  pixelRect(sx + 3,  by + 46, 13, 5,  '#FFB6C1');
-  pixelRect(sx + 15, by + 46, 13, 5,  '#FFB6C1');
-
-  // Diaper
+  pixelRect(sx + 3,  by + 46, 13, 5, '#FFB6C1');
+  pixelRect(sx + 15, by + 46, 13, 5, '#FFB6C1');
   pixelRect(sx + 3,  by + 30, 25, 12, '#F0F0F0');
-  pixelRect(sx + 6,  by + 32, 19,  8, '#FFFFFF');
-  pixelRect(sx + 12, by + 31,  7,  2, '#DDDDDD'); // diaper tab
-
-  // Yellow onesie body
+  pixelRect(sx + 6,  by + 32, 19, 8, '#FFFFFF');
   pixelRect(sx + 4,  by + 16, 23, 16, '#FFE44A');
   pixelRect(sx + 6,  by + 18, 19, 12, '#FFD700');
-  // Onesie snap at bottom
-  pixelRect(sx + 11, by + 28,  3,  3, '#CCA800');
-  pixelRect(sx + 17, by + 28,  3,  3, '#CCA800');
+  pixelRect(sx - 3,  by + 18, 8, 10, '#FDDBB4');
+  pixelRect(sx + 26, by + 18, 8, 10, '#FDDBB4');
+  pixelRect(sx,      by, 32, 20, '#FDDBB4');
+  pixelRect(sx - 3,  by + 5, 6, 10, '#FDDBB4');
+  pixelRect(sx + 29, by + 5, 6, 10, '#FDDBB4');
+  pixelRect(sx + 2,  by + 11, 6, 5, 'rgba(255,130,130,0.45)');
+  pixelRect(sx + 24, by + 11, 6, 5, 'rgba(255,130,130,0.45)');
+  // Eyes
+  pixelRect(sx + 5,  by + 6, 9, 9, '#2244AA');
+  pixelRect(sx + 7,  by + 8, 4, 4, '#111');
+  pixelRect(sx + 10, by + 7, 2, 2, '#fff');
+  pixelRect(sx + 18, by + 6, 9, 9, '#2244AA');
+  pixelRect(sx + 20, by + 8, 4, 4, '#111');
+  pixelRect(sx + 23, by + 7, 2, 2, '#fff');
+  pixelRect(sx + 14, by + 14, 4, 2, '#e0a090');
+  pixelRect(sx + 7,  by + 17, 18, 2, '#c07070');
+  pixelRect(sx + 6,  by + 16, 3, 2, '#c07070');
+  pixelRect(sx + 23, by + 16, 3, 2, '#c07070');
+  pixelRect(sx + 10, by - 3, 4, 5, '#8B5E3C');
+  pixelRect(sx + 16, by - 5, 4, 7, '#8B5E3C');
+  pixelRect(sx + 22, by - 2, 4, 5, '#8B5E3C');
 
-  // Chubby little arms
-  pixelRect(sx - 3,  by + 18,  8, 10, '#FDDBB4');
-  pixelRect(sx + 26, by + 18,  8, 10, '#FDDBB4');
-  // Pudgy fists
-  pixelRect(sx - 4,  by + 26,  7,  6, '#FDDBB4');
-  pixelRect(sx + 28, by + 26,  7,  6, '#FDDBB4');
+  ctx.restore();
 
-  // BIG round baby head (babies have oversized heads)
-  pixelRect(sx,      by,       32, 20, '#FDDBB4');
-  // Chubby cheeks bulging out
-  pixelRect(sx - 3,  by + 5,    6, 10, '#FDDBB4');
-  pixelRect(sx + 29, by + 5,    6, 10, '#FDDBB4');
-  // Rosy cheeks
-  pixelRect(sx + 2,  by + 11,   6,  5, 'rgba(255,130,130,0.45)');
-  pixelRect(sx + 24, by + 11,   6,  5, 'rgba(255,130,130,0.45)');
-
-  // Big sparkly eyes (babies have huge eyes relative to face)
-  // Left eye
-  pixelRect(sx + 5,  by + 6,   9,  9, '#2244AA');
-  pixelRect(sx + 6,  by + 7,   7,  7, '#3355CC');
-  pixelRect(sx + 7,  by + 8,   4,  4, '#111');
-  pixelRect(sx + 5,  by + 6,   9,  2, '#111'); // top lid
-  pixelRect(sx + 10, by + 7,   2,  2, '#fff'); // sparkle
-  pixelRect(sx + 6,  by + 12,  2,  1, '#fff'); // bottom shine
-  // Right eye
-  pixelRect(sx + 18, by + 6,   9,  9, '#2244AA');
-  pixelRect(sx + 19, by + 7,   7,  7, '#3355CC');
-  pixelRect(sx + 20, by + 8,   4,  4, '#111');
-  pixelRect(sx + 18, by + 6,   9,  2, '#111');
-  pixelRect(sx + 23, by + 7,   2,  2, '#fff');
-  pixelRect(sx + 19, by + 12,  2,  1, '#fff');
-
-  // Tiny button nose
-  pixelRect(sx + 14, by + 14,  4,  2, '#e0a090');
-
-  // Big cute smile with little cheek dimples
-  pixelRect(sx + 7,  by + 17, 18,  2, '#c07070');
-  pixelRect(sx + 6,  by + 16,  3,  2, '#c07070'); // left curve
-  pixelRect(sx + 23, by + 16,  3,  2, '#c07070'); // right curve
-
-  // Wispy baby hair (three little tufts)
-  pixelRect(sx + 10, by - 3,   4,  5, '#8B5E3C');
-  pixelRect(sx + 16, by - 5,   4,  7, '#8B5E3C');
-  pixelRect(sx + 22, by - 2,   4,  5, '#8B5E3C');
-  // Hair highlight
-  pixelRect(sx + 17, by - 4,   2,  3, '#B07848');
-
-  // Label + bounce arrow
-  drawText('TESSA!', sx + 14, by - 18, 13, '#FFD700');
-  const bob = Math.sin(Date.now() / 280) * 4;
-  drawText('▼', sx + 14, by - 6 + bob, 14, '#FFD700');
+  if (!flip) {
+    drawText('TESSA!', sx + 14, by - 18, 13, '#FFD700');
+    const bob = Math.sin(Date.now() / 280) * 4;
+    drawText('▼', sx + 14, by - 6 + bob, 14, '#FFD700');
+  }
 }
 
 // ─── DRAW PLAYER ─────────────────────────────────────────────────────────────
-function drawPlayer() {
-  const p = player;
-  if (p.invFrames > 0 && Math.floor(p.invFrames / 5) % 2 === 1) return;
-
-  const sx = p.x - camera;
-  const moving = Math.abs(p.vx) > 0.5 && p.onGround;
-  const f = p.animF;
-
+function drawPlayerAt(sx, py, facingR, animF, moving, inv) {
+  if (inv > 0 && Math.floor(inv / 5) % 2 === 1) return;
+  const f = animF;
   ctx.save();
-  if (!p.facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2 + p.w), 0); }
-
-  // Legs
+  if (!facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2 + 24), 0); }
   ctx.fillStyle = '#111';
   if (moving) {
-    ctx.fillRect(sx + 4 | 0, (p.y + 30 + (f?4:0)) | 0, 8, 18 - (f?4:0));
-    ctx.fillRect(sx + 12 | 0, (p.y + 30 + (f?0:4)) | 0, 8, 18 - (f?0:4));
+    ctx.fillRect(sx+4|0, (py+30+(f?4:0))|0, 8, 18-(f?4:0));
+    ctx.fillRect(sx+12|0,(py+30+(f?0:4))|0, 8, 18-(f?0:4));
   } else {
-    ctx.fillRect(sx + 4 | 0, p.y + 30 | 0, 8, 18);
-    ctx.fillRect(sx + 12 | 0, p.y + 30 | 0, 8, 18);
+    ctx.fillRect(sx+4|0, py+30|0, 8, 18);
+    ctx.fillRect(sx+12|0,py+30|0, 8, 18);
   }
-
-  // Shoes
-  ctx.fillStyle = '#333';
-  ctx.fillRect(sx + 2 | 0, p.y + 44 | 0, 10, 4);
-  ctx.fillRect(sx + 12 | 0, p.y + 44 | 0, 10, 4);
-
-  // Body (black)
-  ctx.fillStyle = '#1a1a1a';
-  ctx.fillRect(sx + 2 | 0, p.y + 16 | 0, 20, 16);
-
-  // Arms
-  ctx.fillStyle = '#1a1a1a';
+  ctx.fillStyle = '#333'; ctx.fillRect(sx+2|0, py+44|0, 10, 4); ctx.fillRect(sx+12|0,py+44|0,10,4);
+  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(sx+2|0, py+16|0, 20, 16);
   const armSwing = moving ? (f ? 4 : -4) : 0;
-  ctx.fillRect(sx - 4 | 0, p.y + 16 + armSwing | 0, 7, 14);
-  ctx.fillRect(sx + 21 | 0, p.y + 16 - armSwing | 0, 7, 14);
-
-  // Neck skin
-  ctx.fillStyle = '#FDDBB4';
-  ctx.fillRect(sx + 9 | 0, p.y + 10 | 0, 6, 8);
-
-  // Head
-  ctx.fillStyle = '#FDDBB4';
-  ctx.fillRect(sx + 3 | 0, p.y + 2 | 0, 18, 14);
-
-  // Dark hair
-  ctx.fillStyle = '#1a0800';
-  ctx.fillRect(sx + 2 | 0, p.y | 0, 20, 7);
-  ctx.fillRect(sx | 0, p.y + 2 | 0, 5, 12);
-  ctx.fillRect(sx + 19 | 0, p.y + 2 | 0, 5, 12);
-
-  // Eyes
-  ctx.fillStyle = '#222';
-  ctx.fillRect(sx + 6 | 0, p.y + 7 | 0, 3, 3);
-  ctx.fillRect(sx + 14 | 0, p.y + 7 | 0, 3, 3);
-
-  // Mouth
-  ctx.fillStyle = '#c07878';
-  ctx.fillRect(sx + 8 | 0, p.y + 12 | 0, 6, 2);
-
+  ctx.fillRect(sx-4|0, py+16+armSwing|0, 7, 14);
+  ctx.fillRect(sx+21|0,py+16-armSwing|0, 7, 14);
+  ctx.fillStyle = '#FDDBB4'; ctx.fillRect(sx+9|0, py+10|0, 6, 8);
+  ctx.fillRect(sx+3|0, py+2|0, 18, 14);
+  ctx.fillStyle = '#1a0800'; ctx.fillRect(sx+2|0, py|0, 20, 7);
+  ctx.fillRect(sx|0, py+2|0, 5, 12); ctx.fillRect(sx+19|0,py+2|0,5,12);
+  ctx.fillStyle = '#222'; ctx.fillRect(sx+6|0,py+7|0,3,3); ctx.fillRect(sx+14|0,py+7|0,3,3);
+  ctx.fillStyle = '#c07878'; ctx.fillRect(sx+8|0,py+12|0,6,2);
   ctx.restore();
+}
+function drawPlayer() {
+  const p = player;
+  const sx = p.x - camera;
+  const moving = Math.abs(p.vx) > 0.5 && p.onGround;
+  drawPlayerAt(sx, p.y, p.facingR, p.animF, moving, p.invFrames);
 }
 
 // ─── DRAW ENEMIES ─────────────────────────────────────────────────────────────
@@ -810,107 +724,139 @@ function drawEnemies() {
   for (const e of enemies) {
     const sx = e.x - camera;
     if (sx < -60 || sx > W + 60) continue;
-
-    if (e.stomped) {
-      // Squash
-      pixelRect(sx - 4, e.y + 34, e.w + 8, 14, e.outfitColor);
-      pixelRect(sx, e.y + 34, e.w, 8, e.hairColor);
-      continue;
-    }
-
+    if (e.stomped) { pixelRect(sx-4,e.y+34,e.w+8,14,e.outfitColor); pixelRect(sx,e.y+34,e.w,8,e.hairColor); continue; }
     const f = e.animF;
     ctx.save();
-    if (!e.facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2 + e.w), 0); }
-
-    // Legs
+    if (!e.facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2+e.w),0); }
     ctx.fillStyle = '#550000';
-    ctx.fillRect(sx + 4 | 0, e.y + 30 + (f?4:0) | 0, 8, 18 - (f?4:0));
-    ctx.fillRect(sx + 12 | 0, e.y + 30 + (f?0:4) | 0, 8, 18 - (f?0:4));
-
-    // Shoes (heels)
+    ctx.fillRect(sx+4|0,e.y+30+(f?4:0)|0,8,18-(f?4:0));
+    ctx.fillRect(sx+12|0,e.y+30+(f?0:4)|0,8,18-(f?0:4));
     ctx.fillStyle = '#220000';
-    ctx.fillRect(sx + 2 | 0, e.y + 44 | 0, 10, 4);
-    ctx.fillRect(sx + 12 | 0, e.y + 44 | 0, 10, 4);
-    ctx.fillRect(sx + 11 | 0, e.y + 46 | 0, 2, 6);
-    ctx.fillRect(sx + 21 | 0, e.y + 46 | 0, 2, 6);
-
-    // Body
-    ctx.fillStyle = e.outfitColor;
-    ctx.fillRect(sx + 2 | 0, e.y + 16 | 0, 20, 16);
-
-    // Arms
+    ctx.fillRect(sx+2|0,e.y+44|0,10,4); ctx.fillRect(sx+12|0,e.y+44|0,10,4);
+    ctx.fillRect(sx+11|0,e.y+46|0,2,6); ctx.fillRect(sx+21|0,e.y+46|0,2,6);
+    ctx.fillStyle = e.outfitColor; ctx.fillRect(sx+2|0,e.y+16|0,20,16);
     const aSway = f ? 3 : -3;
     ctx.fillStyle = '#FDDBB4';
-    ctx.fillRect(sx - 4 | 0, e.y + 18 + aSway | 0, 7, 12);
-    ctx.fillRect(sx + 21 | 0, e.y + 18 - aSway | 0, 7, 12);
-
-    // Head
-    ctx.fillStyle = '#FDDBB4';
-    ctx.fillRect(sx + 3 | 0, e.y + 2 | 0, 18, 14);
-
-    // Big hair
+    ctx.fillRect(sx-4|0,e.y+18+aSway|0,7,12); ctx.fillRect(sx+21|0,e.y+18-aSway|0,7,12);
+    ctx.fillRect(sx+3|0,e.y+2|0,18,14);
     ctx.fillStyle = e.hairColor;
-    ctx.fillRect(sx + 1 | 0, e.y - 6 | 0, 22, 12);
-    ctx.fillRect(sx - 3 | 0, e.y | 0, 7, 14);
-    ctx.fillRect(sx + 20 | 0, e.y | 0, 7, 14);
-
-    // Angry brows
-    ctx.fillStyle = '#442200';
-    ctx.fillRect(sx + 5 | 0, e.y + 6 | 0, 5, 2);
-    ctx.fillRect(sx + 14 | 0, e.y + 6 | 0, 5, 2);
-
-    // Eyes
-    ctx.fillStyle = '#111';
-    ctx.fillRect(sx + 6 | 0, e.y + 8 | 0, 3, 3);
-    ctx.fillRect(sx + 15 | 0, e.y + 8 | 0, 3, 3);
-
-    // Mouth (frown)
-    ctx.fillStyle = '#882244';
-    ctx.fillRect(sx + 8 | 0, e.y + 13 | 0, 8, 2);
-
+    ctx.fillRect(sx+1|0,e.y-6|0,22,12); ctx.fillRect(sx-3|0,e.y|0,7,14); ctx.fillRect(sx+20|0,e.y|0,7,14);
+    ctx.fillStyle = '#442200'; ctx.fillRect(sx+5|0,e.y+6|0,5,2); ctx.fillRect(sx+14|0,e.y+6|0,5,2);
+    ctx.fillStyle = '#111'; ctx.fillRect(sx+6|0,e.y+8|0,3,3); ctx.fillRect(sx+15|0,e.y+8|0,3,3);
+    ctx.fillStyle = '#882244'; ctx.fillRect(sx+8|0,e.y+13|0,8,2);
     ctx.restore();
-
-    // Insult bubble
-    if (e.insult && e.insultTimer > 0) drawInsultBubble(sx + e.w / 2, e.y, e.insult);
+    if (e.insult && e.insultTimer > 0) drawInsultBubble(sx + e.w/2, e.y, e.insult);
   }
+}
+
+// ─── DRAW BOSS ────────────────────────────────────────────────────────────────
+function drawBoss() {
+  if (!boss) return;
+  const sx = boss.x - camera;
+  if (sx < -120 || sx > W + 120) return;
+
+  if (boss.defeated) {
+    // Squash animation
+    const squat = Math.min(boss.defeatTimer * 2, 80);
+    pixelRect(sx - 10, GROUND_Y - 30 + squat/3, boss.w + 20, 30, '#FF1493');
+    pixelRect(sx - 5, GROUND_Y - 18 + squat/3, boss.w + 10, 18, '#FFD700');
+    if (boss.defeatTimer < 120) {
+      drawText('DEFEATED!', sx + boss.w/2, GROUND_Y - 50, 16, '#FFD700');
+    }
+    return;
+  }
+
+  const scale = boss.invFrames > 0 && Math.floor(boss.invFrames/4)%2===1 ? 0 : 1;
+  if (scale === 0) return; // flash on hit
+
+  const f = boss.animF;
+  ctx.save();
+  if (!boss.facingR) { ctx.scale(-1,1); ctx.translate(-(sx*2+boss.w),0); }
+
+  const x = sx, y = boss.y;
+
+  // Legs (big)
+  ctx.fillStyle = '#440000';
+  ctx.fillRect(x+6|0,  y+90+(f?6:0)|0, 18, 30-(f?6:0));
+  ctx.fillRect(x+36|0, y+90+(f?0:6)|0, 18, 30-(f?0:6));
+  // Heels
+  ctx.fillStyle = '#220000';
+  ctx.fillRect(x+2|0,  y+116|0, 22, 6); ctx.fillRect(x+36|0, y+116|0, 22, 6);
+  ctx.fillRect(x+20|0, y+120|0, 4, 10); ctx.fillRect(x+54|0, y+120|0, 4, 10);
+
+  // Body (big hot pink dress)
+  ctx.fillStyle = '#FF1493'; ctx.fillRect(x+4|0, y+56|0, 52, 36);
+  ctx.fillStyle = '#CC0066'; ctx.fillRect(x+8|0, y+60|0, 44, 28);
+  // Belt detail
+  ctx.fillStyle = '#FFD700'; ctx.fillRect(x+4|0, y+56|0, 52, 5);
+
+  // Arms (big)
+  const baSway = f ? 6 : -6;
+  ctx.fillStyle = '#FDDBB4';
+  ctx.fillRect(x-10|0, y+58+baSway|0, 16, 28); ctx.fillRect(x+54|0, y+58-baSway|0, 16, 28);
+
+  // Head (big)
+  ctx.fillStyle = '#FDDBB4'; ctx.fillRect(x+6|0, y+4|0, 48, 54);
+  // Big hair (teased up)
+  ctx.fillStyle = '#FFD700';
+  ctx.fillRect(x+2|0,  y-18|0, 56, 28);
+  ctx.fillRect(x-6|0,  y-6|0,  20, 36);
+  ctx.fillRect(x+46|0, y-6|0,  20, 36);
+  ctx.fillRect(x+8|0,  y-28|0, 44, 16);
+  // Hair highlights
+  ctx.fillStyle = '#FFEE44';
+  ctx.fillRect(x+16|0, y-24|0, 10, 20); ctx.fillRect(x+34|0, y-20|0, 10, 16);
+
+  // Big angry brows
+  ctx.fillStyle = '#442200';
+  ctx.fillRect(x+10|0, y+18|0, 14, 4); ctx.fillRect(x+36|0, y+18|0, 14, 4);
+  // Inner brows angled
+  ctx.fillRect(x+22|0, y+14|0, 6, 4);  ctx.fillRect(x+32|0, y+14|0, 6, 4);
+
+  // Eyes (big and angry)
+  ctx.fillStyle = '#111';
+  ctx.fillRect(x+10|0, y+24|0, 12, 10); ctx.fillRect(x+38|0, y+24|0, 12, 10);
+  ctx.fillStyle = '#CC2200';
+  ctx.fillRect(x+12|0, y+26|0, 8, 6); ctx.fillRect(x+40|0, y+26|0, 8, 6);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(x+14|0, y+27|0, 4, 4); ctx.fillRect(x+42|0, y+27|0, 4, 4);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x+19|0, y+26|0, 2, 2); ctx.fillRect(x+47|0, y+26|0, 2, 2);
+
+  // Big lipstick mouth (angry frown)
+  ctx.fillStyle = '#CC0044';
+  ctx.fillRect(x+14|0, y+40|0, 32, 6);
+  ctx.fillStyle = '#FF4488';
+  ctx.fillRect(x+15|0, y+41|0, 30, 3);
+  ctx.fillStyle = '#990022';
+  ctx.fillRect(x+12|0, y+38|0, 6, 4); ctx.fillRect(x+42|0, y+38|0, 6, 4);
+
+  ctx.restore();
+
+  // MEGA KAREN label + crown
+  drawText('👑 MEGA KAREN 👑', sx + boss.w/2, boss.y - 28, 12, '#FFD700');
+  if (boss.insult && boss.insultTimer > 0) drawInsultBubble(sx + boss.w/2, boss.y, boss.insult);
 }
 
 function drawProjectiles() {
   for (const p of projectiles) {
     const sx = p.x - camera;
     if (sx < -20 || sx > W + 20) continue;
-    ctx.save();
-    ctx.translate(sx | 0, p.y | 0);
-    ctx.rotate(p.spin);
+    ctx.save(); ctx.translate(sx|0, p.y|0); ctx.rotate(p.spin);
     if (p.type === 'purse') {
-      // Brown handbag flying through the air
-      ctx.fillStyle = '#8B4513';
-      ctx.fillRect(-8, -6, 16, 12);
-      ctx.fillStyle = '#6B3010';
-      ctx.fillRect(-6, -4, 12, 8);
-      ctx.fillStyle = '#C8860A';
-      ctx.fillRect(-4, -8, 8, 4);
-      ctx.fillStyle = '#FFD700';
-      ctx.fillRect(-2, -3, 4, 3);
+      ctx.fillStyle = '#8B4513'; ctx.fillRect(-8,-6,16,12);
+      ctx.fillStyle = '#6B3010'; ctx.fillRect(-6,-4,12,8);
+      ctx.fillStyle = '#C8860A'; ctx.fillRect(-4,-8,8,4);
+      ctx.fillStyle = '#FFD700'; ctx.fillRect(-2,-3,4,3);
     } else if (p.type === 'phone') {
-      // Black smartphone
-      ctx.fillStyle = '#111';
-      ctx.fillRect(-5, -9, 10, 18);
-      ctx.fillStyle = '#4488FF';
-      ctx.fillRect(-3, -7, 6, 12);
-      ctx.fillStyle = '#222';
-      ctx.fillRect(-1, 6, 2, 2);
+      ctx.fillStyle = '#111'; ctx.fillRect(-5,-9,10,18);
+      ctx.fillStyle = '#4488FF'; ctx.fillRect(-3,-7,6,12);
+      ctx.fillStyle = '#222'; ctx.fillRect(-1,6,2,2);
     } else {
-      // Cocktail glass
-      ctx.fillStyle = '#AADDFF';
-      ctx.fillRect(-7, -8, 14, 8);
-      ctx.fillStyle = 'rgba(255,80,180,0.85)';
-      ctx.fillRect(-6, -7, 12, 6);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(-1, 0, 2, 7);
-      ctx.fillRect(-5, 7, 10, 2);
-      ctx.fillStyle = '#FFFF88';
-      ctx.fillRect(3, -10, 2, 6);
+      ctx.fillStyle = '#AADDFF'; ctx.fillRect(-7,-8,14,8);
+      ctx.fillStyle = 'rgba(255,80,180,0.85)'; ctx.fillRect(-6,-7,12,6);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(-1,0,2,7); ctx.fillRect(-5,7,10,2);
+      ctx.fillStyle = '#FFFF88'; ctx.fillRect(3,-10,2,6);
     }
     ctx.restore();
   }
@@ -919,190 +865,194 @@ function drawProjectiles() {
 function drawInsultBubble(cx, ty, text) {
   ctx.font = 'bold 11px monospace';
   const tw = ctx.measureText(text).width;
-  const pad = 11;
-  const bw = tw + pad * 2, bh = 28;
-  const bx = cx - bw / 2, by = ty - 46;
-
-  // Drop shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect((bx + 3) | 0, (by + 3) | 0, bw | 0, bh);
-
-  // White bubble
+  const pad = 11, bw = tw + pad * 2, bh = 28;
+  const bx = cx - bw / 2, by = ty - 48;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect((bx+3)|0,(by+3)|0,bw|0,bh);
+  ctx.fillStyle = '#FFFFFF'; ctx.fillRect(bx|0,by|0,bw|0,bh);
+  ctx.strokeStyle = '#CC0000'; ctx.lineWidth = 2.5;
+  ctx.strokeRect(bx|0,by|0,bw|0,bh);
   ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(bx | 0, by | 0, bw | 0, bh);
-
-  // Red border
-  ctx.strokeStyle = '#CC0000';
-  ctx.lineWidth = 2.5;
-  ctx.strokeRect(bx | 0, by | 0, bw | 0, bh);
-
-  // Triangle tail (pointing down toward enemy)
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath();
-  ctx.moveTo((cx - 7) | 0, (by + bh) | 0);
-  ctx.lineTo((cx + 7) | 0, (by + bh) | 0);
-  ctx.lineTo(cx | 0,       (by + bh + 10) | 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = '#CC0000';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo((cx - 7) | 0, (by + bh) | 0);
-  ctx.lineTo(cx | 0,       (by + bh + 10) | 0);
-  ctx.lineTo((cx + 7) | 0, (by + bh) | 0);
-  ctx.stroke();
-
-  // Bold red text
-  ctx.fillStyle = '#AA0000';
-  ctx.font = 'bold 11px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(text, cx | 0, (by + 19) | 0);
+  ctx.beginPath(); ctx.moveTo((cx-7)|0,(by+bh)|0); ctx.lineTo((cx+7)|0,(by+bh)|0); ctx.lineTo(cx|0,(by+bh+10)|0); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#CC0000'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo((cx-7)|0,(by+bh)|0); ctx.lineTo(cx|0,(by+bh+10)|0); ctx.moveTo((cx+7)|0,(by+bh)|0); ctx.lineTo(cx|0,(by+bh+10)|0); ctx.stroke();
+  ctx.fillStyle = '#AA0000'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(text, cx|0, (by+19)|0);
 }
 
 // ─── DRAW HUD ────────────────────────────────────────────────────────────────
 function drawHUD() {
-  // Health bar bg
   pixelRect(10, 10, 154, 18, '#222');
   const hp = player.health / HEALTH_MAX;
   const hcol = hp > 0.5 ? '#22DD44' : hp > 0.25 ? '#FFAA00' : '#FF2222';
   pixelRect(12, 12, Math.round(150 * hp), 14, hcol);
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
-  ctx.strokeRect(10, 10, 154, 18);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.strokeRect(10, 10, 154, 18);
   drawText('HP', 18, 23, 10, '#fff', 'left');
-
-  // Lives
-  for (let i = 0; i < 3; i++) {
-    drawText('♥', 175 + i * 20, 24, 14, i < lives ? '#FF3355' : '#333');
-  }
-
-  // Score
+  for (let i = 0; i < 3; i++) drawText('♥', 175 + i * 20, 24, 14, i < lives ? '#FF3355' : '#333');
   drawText(`SCORE: ${score}`, W - 10, 24, 12, '#FFD700', 'right');
-
-  // Day
   drawText(DAYS[day], W / 2, 24, 13, '#88AAFF');
+
+  // Boss health bar on Sunday
+  if (day === 6 && boss && !boss.defeated) {
+    const bx = W/2 - 120, bw = 240;
+    drawText('⚡ MEGA KAREN ⚡', W/2, 44, 11, '#FF44AA');
+    pixelRect(bx, 48, bw, 14, '#330011');
+    const bRatio = boss.hp / boss.maxHp;
+    pixelRect(bx + 2, 50, Math.round((bw-4) * bRatio), 10, '#FF1493');
+    ctx.strokeStyle = '#FF44AA'; ctx.lineWidth = 2; ctx.strokeRect(bx, 48, bw, 14);
+    for (let i = 1; i < boss.maxHp; i++) {
+      const segX = bx + (bw * i / boss.maxHp);
+      pixelRect(segX - 1, 48, 2, 14, '#330011');
+    }
+  }
 }
 
 // ─── DRAW SCREENS ────────────────────────────────────────────────────────────
 function drawOverlay(alpha=0.72) {
-  ctx.fillStyle = `rgba(0,0,0,${alpha})`;
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = `rgba(0,0,0,${alpha})`; ctx.fillRect(0,0,W,H);
 }
 
 function drawTitle() {
-  // Background
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#060614'); g.addColorStop(1, '#180a28');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-  // Stars
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#060614'); g.addColorStop(1,'#180a28');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
   for (let i = 0; i < 80; i++) {
-    ctx.fillStyle = `rgba(255,255,255,${0.3 + (i%3)*0.2})`;
-    ctx.fillRect((i * 173 + 41) % W, (i * 59 + 7) % 200, 2, 2);
+    ctx.fillStyle = `rgba(255,255,255,${0.3+(i%3)*0.2})`;
+    ctx.fillRect((i*173+41)%W,(i*59+7)%200,2,2);
   }
-
   drawText("CARLY'S LONG DAY", W/2, 80, 42, '#FFD700');
-  // Subtitle outline effect
-  ctx.font = 'bold 42px monospace'; ctx.textAlign = 'center';
-  ctx.strokeStyle = '#882200'; ctx.lineWidth = 3;
-  ctx.strokeText("CARLY'S LONG DAY", W/2, 80);
-
+  ctx.font='bold 42px monospace'; ctx.textAlign='center';
+  ctx.strokeStyle='#882200'; ctx.lineWidth=3; ctx.strokeText("CARLY'S LONG DAY", W/2, 80);
   drawText('Get home to baby Tessa!', W/2, 118, 16, '#FF99BB');
   drawText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', W/2, 136, 10, '#444');
-
   const tips = [
-    ['MOVE', 'A / D  or  ← →'],
-    ['JUMP', 'SPACE  or  W  or  ↑'],
-    ['DEFEAT', 'Jump on Mean Ladies'],
-    ['WINE 🍷', '+10 points each'],
-    ['REESES 🍫', '+30 HP each'],
-    ['DANGER', 'Jump over thrown purses & glasses!'],
+    ['MOVE','A / D  or  ← →'],
+    ['JUMP','SPACE  or  W  or  ↑'],
+    ['DEFEAT','Jump on Mean Ladies (+150 pts)'],
+    ['WINE 🍷','+10 pts — mostly on platforms!'],
+    ['REESES 🍫','+25 pts & +30 HP — very rare'],
+    ['DANGER','Jump over thrown objects!'],
+    ['SUNDAY','Defeat Mega Karen to win!'],
   ];
-  tips.forEach(([k,v], i) => {
-    drawText(k, W/2 - 80, 172 + i * 26, 11, '#FFD700', 'right');
-    drawText(v, W/2 - 68, 172 + i * 26, 11, '#ccc', 'left');
+  tips.forEach(([k,v],i) => {
+    drawText(k, W/2-80, 165+i*26, 11, '#FFD700', 'right');
+    drawText(v, W/2-68, 165+i*26, 11, '#ccc', 'left');
   });
-
-  drawText('7 DAYS  ·  3 LIVES  ·  GET HOME EACH NIGHT', W/2, 360, 12, '#667788');
-
-  const p = 0.6 + Math.sin(Date.now() / 380) * 0.4;
+  const p = 0.6 + Math.sin(Date.now()/380) * 0.4;
   ctx.globalAlpha = p;
-  drawText('PRESS  SPACE  TO  START', W/2, 410, 18, '#FFD700');
+  drawText('PRESS  SPACE  TO  START', W/2, 420, 18, '#FFD700');
   ctx.globalAlpha = 1;
 }
 
 function drawDayIntro() {
   drawOverlay(0.78);
   const t = introTimer;
-  const scale = t < 120 ? 1 : 1 + (t - 120) / 30 * 0.4;
-  ctx.save();
-  ctx.translate(W/2, H/2);
-  ctx.scale(scale, scale);
+  const scale = t < 120 ? 1 : 1 + (t-120)/30*0.4;
+  ctx.save(); ctx.translate(W/2, H/2); ctx.scale(scale,scale);
   drawText(DAYS[day], 0, -20, 52, '#FFD700', 'center');
   ctx.restore();
-  drawText('Get home to Tessa!', W/2, H/2 + 36, 18, '#fff');
-  drawText(DAY_THEMES[day].desc, W/2, H/2 + 66, 12, '#aaaaaa');
+  drawText('Get home to Tessa!', W/2, H/2+36, 18, '#fff');
+  drawText(DAY_THEMES[day].desc, W/2, H/2+66, 12, '#aaaaaa');
+  if (day === 6) drawText('⚡ MEGA KAREN AWAITS ⚡', W/2, H/2+90, 13, '#FF44AA');
 }
 
 function drawLevelComplete() {
   drawOverlay(0.8);
-  drawText('YOU MADE IT HOME!', W/2, H/2 - 60, 32, '#FFD700');
-  drawText(`${DAYS[day]} Complete!`, W/2, H/2 - 18, 20, '#FF99BB');
-  drawText(`Day score:   ${dayScore}`, W/2, H/2 + 18, 16, '#fff');
-  drawText(`Total score: ${score + dayScore}`, W/2, H/2 + 44, 16, '#FFD700');
-  if (day < 6) {
-    drawText(`Next: ${DAYS[day+1]}`, W/2, H/2 + 78, 14, '#88AAFF');
-  }
-  const p = 0.5 + Math.sin(Date.now() / 400) * 0.5;
-  ctx.globalAlpha = p;
-  drawText('SPACE to continue', W/2, H/2 + 108, 13, '#aaa');
-  ctx.globalAlpha = 1;
+  drawText('YOU MADE IT HOME!', W/2, H/2-60, 32, '#FFD700');
+  drawText(`${DAYS[day]} Complete!`, W/2, H/2-18, 20, '#FF99BB');
+  drawText(`Day score:   ${dayScore}`, W/2, H/2+18, 16, '#fff');
+  drawText(`Total score: ${score+dayScore}`, W/2, H/2+44, 16, '#FFD700');
+  if (day < 6) drawText(`Next: ${DAYS[day+1]}`, W/2, H/2+78, 14, '#88AAFF');
+  const p = 0.5+Math.sin(Date.now()/400)*0.5; ctx.globalAlpha=p;
+  drawText('SPACE to continue', W/2, H/2+108, 13, '#aaa');
+  ctx.globalAlpha=1;
 }
 
 function drawGameOver() {
-  ctx.fillStyle = '#0e0000'; ctx.fillRect(0, 0, W, H);
-  for (let i = 0; i < 40; i++) {
-    ctx.fillStyle = `rgba(180,0,0,${0.05 + (i%4)*0.03})`;
-    ctx.fillRect((i*137)%W, (i*61)%H, 3, 3);
-  }
+  ctx.fillStyle='#0e0000'; ctx.fillRect(0,0,W,H);
+  for (let i=0;i<40;i++) { ctx.fillStyle=`rgba(180,0,0,${0.05+(i%4)*0.03})`; ctx.fillRect((i*137)%W,(i*61)%H,3,3); }
   drawText('GAME OVER', W/2, 160, 56, '#FF2222');
-  ctx.font = 'bold 56px monospace'; ctx.textAlign = 'center';
-  ctx.strokeStyle = '#660000'; ctx.lineWidth = 3;
-  ctx.strokeText('GAME OVER', W/2, 160);
+  ctx.font='bold 56px monospace'; ctx.textAlign='center';
+  ctx.strokeStyle='#660000'; ctx.lineWidth=3; ctx.strokeText('GAME OVER',W/2,160);
   drawText('The mean ladies won this week.', W/2, 220, 17, '#cc8888');
   drawText(`You made it to ${DAYS[day]}`, W/2, 256, 15, '#aaa');
   drawText(`Final Score: ${score}`, W/2, 292, 20, '#FFD700');
-  const p = 0.5 + Math.sin(Date.now() / 400) * 0.5;
-  ctx.globalAlpha = p;
+  const p=0.5+Math.sin(Date.now()/400)*0.5; ctx.globalAlpha=p;
   drawText('PRESS SPACE TO TRY AGAIN', W/2, 380, 16, '#FF6666');
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha=1;
 }
 
 function drawWin() {
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#000f00'); g.addColorStop(1, '#001800');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // Background
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#050a1a'); g.addColorStop(1,'#0a0518');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
   // Confetti
-  for (let i = 0; i < 60; i++) {
-    const t = (Date.now() / 20 + i * 50) % H;
-    ctx.fillStyle = ['#FFD700','#FF69B4','#00CED1','#FF6347','#98FB98'][i%5];
-    ctx.fillRect(((i * 137 + 23) % W) | 0, t | 0, 5, 5);
+  for (let i=0;i<70;i++) {
+    const t=(Date.now()/18+i*47)%H;
+    ctx.fillStyle=['#FFD700','#FF69B4','#00CED1','#FF6347','#98FB98','#DDA0DD'][i%6];
+    ctx.fillRect(((i*137+23)%W)|0,t|0,5,5);
   }
-  drawText('YOU SURVIVED THE WEEK!', W/2, 130, 34, '#FFD700');
-  drawText('Carly made it home to Tessa every night!', W/2, 180, 14, '#FF99BB');
-  drawText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', W/2, 202, 10, '#335533');
-  drawText(`FINAL SCORE: ${score}`, W/2, 262, 30, '#fff');
-  const p = 0.5 + Math.sin(Date.now() / 400) * 0.5;
-  ctx.globalAlpha = p;
-  drawText('PRESS SPACE TO PLAY AGAIN', W/2, 380, 16, '#FFD700');
-  ctx.globalAlpha = 1;
+
+  drawText('YOU SURVIVED THE WEEK!', W/2, 44, 28, '#FFD700');
+  ctx.font='bold 28px monospace'; ctx.textAlign='center';
+  ctx.strokeStyle='#884400'; ctx.lineWidth=2; ctx.strokeText('YOU SURVIVED THE WEEK!',W/2,44);
+
+  // Hug scene — Carly on left facing right, Tessa on right facing left (flipped)
+  const hugCY = 80; // center y for the hug scene
+  const carlyX = W/2 - 70;
+  const tessaX = W/2 + 24;
+
+  // Draw Carly (facing right — normal)
+  drawPlayerAt(carlyX, hugCY, true, 0, false, 0);
+  // Draw Tessa (facing left — flip)
+  drawTessa(tessaX, hugCY - 4, true);
+
+  // Draw overlapping arms (hug detail)
+  pixelRect(W/2 - 8, hugCY + 22, 18, 10, '#1a1a1a'); // Carly's right arm reaching
+  pixelRect(W/2 - 6, hugCY + 18, 16, 8, '#FDDBB4');  // skin over arm
+
+  // Hearts floating above them
+  const hearts = ['♥','♡','♥','♡'];
+  hearts.forEach((h, i) => {
+    const hx = W/2 - 30 + i * 20;
+    const hy = hugCY - 16 + Math.sin(Date.now()/400 + i) * 5;
+    const sz = i%2===0 ? 16 : 12;
+    const col = i%2===0 ? '#FF69B4' : '#FF99CC';
+    drawText(h, hx, hy, sz, col);
+  });
+
+  drawText(`FINAL SCORE: ${score}`, W/2, hugCY + 78, 22, '#fff');
+
+  // Leaderboard
+  const lb = getLeaderboard();
+  const lbY = hugCY + 108;
+  drawText('━━━━━━  HIGH SCORES  ━━━━━━', W/2, lbY, 12, '#FFD700');
+  if (lb.length === 0) {
+    drawText('No scores yet!', W/2, lbY + 22, 12, '#666');
+  } else {
+    lb.slice(0, 6).forEach((entry, i) => {
+      const isNew = i === 0 && !scoreSaved;
+      const col = i === 0 ? '#FFD700' : i === 1 ? '#CCCCCC' : i === 2 ? '#CD7F32' : '#888';
+      const rank = ['🥇','🥈','🥉','4.','5.','6.'][i];
+      const line = `${rank}  ${String(entry.score).padStart(6,' ')}   ${entry.date}`;
+      drawText(line, W/2, lbY + 22 + i * 22, 12, col);
+      if (entry.score === score && i === lb.findIndex(e=>e.score===score)) {
+        drawText('◄ YOU', W/2 + 130, lbY + 22 + i * 22, 11, '#FFD700', 'left');
+      }
+    });
+  }
+
+  const p=0.5+Math.sin(Date.now()/400)*0.5; ctx.globalAlpha=p;
+  drawText('PRESS SPACE TO PLAY AGAIN', W/2, H - 18, 14, '#FFD700');
+  ctx.globalAlpha=1;
 }
 
 // ─── MAIN DRAW ───────────────────────────────────────────────────────────────
 function draw() {
-  ctx.clearRect(0, 0, W, H);
-
-  if (state === ST.TITLE)    { drawTitle();    return; }
-  if (state === ST.GAMEOVER) { drawGameOver(); return; }
-  if (state === ST.WIN)      { drawWin();      return; }
+  ctx.clearRect(0,0,W,H);
+  if (state===ST.TITLE)    { drawTitle();    return; }
+  if (state===ST.GAMEOVER) { drawGameOver(); return; }
+  if (state===ST.WIN)      { drawWin();      return; }
 
   drawBackground();
   drawGround();
@@ -1110,25 +1060,18 @@ function draw() {
   drawCollectibles();
   drawTessa();
   drawEnemies();
+  drawBoss();
   drawProjectiles();
   drawPlayer();
-
   drawHUD();
 
-  if (state === ST.INTRO)    drawDayIntro();
-  if (state === ST.COMPLETE) drawLevelComplete();
+  if (state===ST.INTRO)    drawDayIntro();
+  if (state===ST.COMPLETE) drawLevelComplete();
 }
 
 // ─── GAME LOOP ───────────────────────────────────────────────────────────────
-state = ST.TITLE;
-lives = 3; score = 0; day = 0;
-
-function loop() {
-  update();
-  draw();
-  requestAnimationFrame(loop);
-}
-
+state=ST.TITLE; lives=3; score=0; day=0;
+function loop() { update(); draw(); requestAnimationFrame(loop); }
 requestAnimationFrame(loop);
 </script>
 </body>
