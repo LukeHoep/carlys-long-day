@@ -135,33 +135,51 @@ function mkGroupSingle(x) {
 }
 
 function mkGroupStepUp(x) {
+  // Low dumpster + awning reachable from ground or dumpster (easy step)
   const stepW = pick([80, 96, 64]);
   return [
-    mkPl(x,              GROUND_Y - 44, stepW, 44, '#2a5a2a', 'dumpster'),
-    mkPl(x + stepW + 70, GROUND_Y - 100, 110, 10, '#882200', 'awning'),
+    mkPl(x,              GROUND_Y - 44,  stepW, 44, '#2a5a2a', 'dumpster'),
+    mkPl(x + stepW + 60, GROUND_Y - 100, 110,   10, '#882200', 'awning'),
+  ];
+}
+
+function mkGroupBoost(x) {
+  // Jump on dumpster FIRST, then jump again to reach elevated awning.
+  // Awning at 183px above ground: NOT reachable from ground (ground jump peak=147px),
+  // but reachable from dumpster top (dumpster adds 44px → peak=191px from ground).
+  const dumpW = pick([80, 96]);
+  return [
+    mkPl(x,           GROUND_Y - 44,  dumpW, 44, '#2a5a2a', 'dumpster'),
+    mkPl(x + dumpW/2 - 10, GROUND_Y - 183, 110, 10, '#aa3300', 'awning'),
   ];
 }
 
 function mkGroupStaircase(x) {
+  // Three steps. Top awning (183px) requires jumping from the middle awning — NOT reachable from ground.
   return [
     mkPl(x,       GROUND_Y - 44,  80,  44, '#2a5a2a', 'dumpster'),
-    mkPl(x + 110, GROUND_Y - 90,  90,  10, '#882200', 'awning'),
-    mkPl(x + 230, GROUND_Y - 140, 110, 10, '#aa3300', 'awning'),
+    mkPl(x + 115, GROUND_Y - 100, 90,  10, '#882200', 'awning'),
+    mkPl(x + 225, GROUND_Y - 183, 110, 10, '#aa3300', 'awning'),
   ];
 }
 
 function mkGroupAwning(x) {
+  // Crate on ground, awning at 162px. NOT reachable from ground (peak=147px),
+  // reachable from crate top (peak=191px from ground). Crate gives enough clearance below awning.
   return [
     mkPl(x - 5,  GROUND_Y - 44,  84, 44, '#8a7040', 'crate'),
-    mkPl(x - 20, GROUND_Y - 135, 130, 10, '#882200', 'awning'),
+    mkPl(x - 20, GROUND_Y - 162, 130, 10, '#882200', 'awning'),
   ];
 }
 
 function mkGroupTower(x) {
+  // Three levels. Middle crate at 120px (reachable from ground or dumpster).
+  // Top awning at 205px (NOT reachable from ground, NOT from dumpster alone — must use crate).
+  // Gaps are large enough that Carly can stand on each level without clipping the level above.
   return [
-    mkPl(x,      GROUND_Y - 44,  96,  44, '#2a5a2a', 'dumpster'),
-    mkPl(x + 10, GROUND_Y - 94,  76,  10, '#8a7040', 'crate'),
-    mkPl(x - 20, GROUND_Y - 150, 140, 10, '#882200', 'awning'),
+    mkPl(x,      GROUND_Y - 44,  96, 44, '#2a5a2a', 'dumpster'),
+    mkPl(x + 10, GROUND_Y - 122, 76, 10, '#8a7040', 'crate'),
+    mkPl(x - 20, GROUND_Y - 205, 140,10, '#882200', 'awning'),
   ];
 }
 
@@ -202,15 +220,15 @@ function generateLevel(d) {
     const t = Math.random();
     let group;
     if (d === 0) {
-      group = t < 0.75 ? mkGroupSingle(px) : mkGroupStepUp(px);
+      group = t < 0.65 ? mkGroupSingle(px) : mkGroupStepUp(px);
     } else if (d === 1) {
-      group = t < 0.35 ? mkGroupSingle(px) : t < 0.75 ? mkGroupStepUp(px) : mkGroupStaircase(px);
+      group = t < 0.25 ? mkGroupSingle(px) : t < 0.55 ? mkGroupStepUp(px) : t < 0.80 ? mkGroupStaircase(px) : mkGroupBoost(px);
     } else if (d === 2) {
-      group = t < 0.15 ? mkGroupSingle(px) : t < 0.45 ? mkGroupStepUp(px) : t < 0.75 ? mkGroupStaircase(px) : mkGroupAwning(px);
+      group = t < 0.10 ? mkGroupSingle(px) : t < 0.30 ? mkGroupStepUp(px) : t < 0.55 ? mkGroupStaircase(px) : t < 0.75 ? mkGroupAwning(px) : mkGroupBoost(px);
     } else if (d === 3) {
-      group = t < 0.10 ? mkGroupSingle(px) : t < 0.30 ? mkGroupStepUp(px) : t < 0.55 ? mkGroupStaircase(px) : t < 0.78 ? mkGroupAwning(px) : mkGroupTower(px);
+      group = t < 0.05 ? mkGroupSingle(px) : t < 0.20 ? mkGroupStepUp(px) : t < 0.40 ? mkGroupStaircase(px) : t < 0.60 ? mkGroupAwning(px) : t < 0.78 ? mkGroupTower(px) : mkGroupBoost(px);
     } else {
-      group = t < 0.05 ? mkGroupSingle(px) : t < 0.20 ? mkGroupStepUp(px) : t < 0.42 ? mkGroupStaircase(px) : t < 0.65 ? mkGroupAwning(px) : mkGroupTower(px);
+      group = t < 0.08 ? mkGroupStepUp(px) : t < 0.28 ? mkGroupStaircase(px) : t < 0.50 ? mkGroupAwning(px) : t < 0.72 ? mkGroupTower(px) : mkGroupBoost(px);
     }
 
     for (const pl of group) {
@@ -229,17 +247,20 @@ function generateLevel(d) {
     enemies.push(mkEnemy(ex, speed));
   }
 
-  // Boss arena for Sunday (day 6)
+  // Boss arena for Sunday (day 6).
+  // Boss head top is at GROUND_Y-120=250. Player must stomp it from ABOVE.
+  // Platform at GROUND_Y-140=230 lets player walk onto it and fall/jump down onto boss head.
   if (d === 6) {
-    const arenaX = levelW - 1100;
-    boss = mkBoss(arenaX + 300);
-    // Arena platforms for jumping onto boss head (boss is 120px tall, head at top)
-    platforms.push(mkPl(arenaX,       GROUND_Y - 44,  100, 44, '#2a5a2a', 'dumpster'));
-    platforms.push(mkPl(arenaX + 160, GROUND_Y - 90,  90,  10, '#882200', 'awning'));
-    platforms.push(mkPl(arenaX + 440, GROUND_Y - 44,  100, 44, '#2a5a2a', 'dumpster'));
-    platforms.push(mkPl(arenaX + 550, GROUND_Y - 90,  90,  10, '#882200', 'awning'));
-    platforms.push(mkPl(arenaX + 200, GROUND_Y - 150, 120, 10, '#aa2200', 'awning'));
-    platforms.push(mkPl(arenaX + 380, GROUND_Y - 150, 120, 10, '#aa2200', 'awning'));
+    const arenaX = levelW - 1150;
+    boss = mkBoss(arenaX + 380);
+    // Left approach: dumpster → awning → high awning above boss
+    platforms.push(mkPl(arenaX,           GROUND_Y - 44,  110, 44, '#2a5a2a', 'dumpster'));
+    platforms.push(mkPl(arenaX + 130,     GROUND_Y - 100, 100, 10, '#882200', 'awning'));
+    platforms.push(mkPl(arenaX + 240,     GROUND_Y - 140, 120, 10, '#aa2200', 'awning'));
+    // Right approach: dumpster → awning → high awning
+    platforms.push(mkPl(arenaX + 560,     GROUND_Y - 44,  110, 44, '#2a5a2a', 'dumpster'));
+    platforms.push(mkPl(arenaX + 450,     GROUND_Y - 100, 100, 10, '#882200', 'awning'));
+    platforms.push(mkPl(arenaX + 340,     GROUND_Y - 140, 120, 10, '#aa2200', 'awning'));
   }
 
   // Collectibles — wines on platforms and high spots, reeses rare on ground
@@ -290,7 +311,7 @@ function generateLevel(d) {
 function mkEnemy(x, speed) {
   return {
     x, y: GROUND_Y - 48, w: 24, h: 48,
-    speed, vx: speed,
+    speed, vx: speed, vy: 0, onGround: true,
     patrolL: x - 90, patrolR: x + 90,
     mode: 'patrol',
     insult: null, insultTimer: 0, insultCooldown: randInt(60, 120),
@@ -402,31 +423,69 @@ function updateEnemies() {
       if (--e.stompTimer <= 0) enemies.splice(i, 1);
       continue;
     }
+
     const dx = (player.x + player.w/2) - (e.x + e.w/2);
     const dist = Math.abs(dx);
     if (dist < CHASE_RANGE) e.mode = 'chase';
     else if (dist > CHASE_RANGE + 150) e.mode = 'patrol';
 
-    if (e.mode === 'chase') { const dir = dx > 0 ? 1 : -1; e.x += e.speed * 1.6 * dir; e.facingR = dir > 0; }
+    // Horizontal movement
+    const moveDir = e.mode === 'chase' ? (dx > 0 ? 1 : -1) : Math.sign(e.vx) || 1;
+    if (e.mode === 'chase') { e.x += e.speed * 1.6 * moveDir; e.facingR = moveDir > 0; }
     else { e.x += e.vx; e.facingR = e.vx > 0; if (e.x < e.patrolL || e.x > e.patrolR) e.vx *= -1; }
 
-    if (e.y + e.h > GROUND_Y) e.y = GROUND_Y - e.h;
-    // Block by ground-level platforms
-    for (const pl of platforms) {
-      if (pl.y + pl.h < GROUND_Y - 5) continue;
-      if (!overlap(e, pl)) continue;
-      if (e.x + e.w / 2 < pl.x + pl.w / 2) { e.x = pl.x - e.w; e.vx = Math.abs(e.vx); }
-      else { e.x = pl.x + pl.w; e.vx = -Math.abs(e.vx); }
+    // Look-ahead: jump over ground-touching obstacles (dumpsters, crates, benches)
+    if (e.onGround) {
+      const lookX = e.x + (moveDir > 0 ? e.w + 36 : -36);
+      for (const pl of platforms) {
+        if (pl.y + pl.h < GROUND_Y - 5) continue; // skip floating awnings
+        if (lookX >= pl.x && lookX <= pl.x + pl.w) {
+          e.vy = JUMP_V * 0.88; // slightly lower arc than player
+          e.onGround = false;
+          break;
+        }
+      }
     }
 
-    if (e.mode === 'chase' && --e.insultCooldown <= 0) {
+    // Apply gravity and vertical movement
+    e.vy += GRAVITY;
+    e.y += e.vy;
+    e.onGround = false;
+
+    // Ground collision
+    if (e.y + e.h >= GROUND_Y) {
+      e.y = GROUND_Y - e.h;
+      e.vy = 0;
+      e.onGround = true;
+    }
+
+    // Platform collision (land on top of platforms, clip out of sides)
+    for (const pl of platforms) {
+      if (!overlap(e, pl)) continue;
+      const prevBottom = e.y + e.h - e.vy;
+      if (e.vy >= 0 && prevBottom <= pl.y + 6) {
+        // Land on top
+        e.y = pl.y - e.h; e.vy = 0; e.onGround = true;
+      } else if (e.vy < 0 && e.y - e.vy >= pl.y + pl.h - 4) {
+        // Bonk ceiling
+        e.y = pl.y + pl.h; e.vy = 0;
+      } else if (pl.y + pl.h >= GROUND_Y - 5) {
+        // Horizontal push only for ground-level obstacles (not floating awnings)
+        if (e.x + e.w/2 < pl.x + pl.w/2) { e.x = pl.x - e.w; e.vx = Math.abs(e.vx); }
+        else { e.x = pl.x + pl.w; e.vx = -Math.abs(e.vx); }
+      }
+    }
+
+    // Insults and projectiles (only throw while on ground to avoid mid-air weirdness)
+    if (e.mode === 'chase' && e.onGround && --e.insultCooldown <= 0) {
       e.insult = pick(INSULTS); e.insultTimer = 130;
       e.insultCooldown = randInt(140, 220);
       const dir = player.x > e.x ? 1 : -1;
-      projectiles.push({ x: e.x + (dir > 0 ? e.w + 2 : -2), y: GROUND_Y - 34, vx: dir * (4 + day * 0.3), spin: 0, type: pick(['purse','phone','glass']) });
+      projectiles.push({ x: e.x + (dir > 0 ? e.w + 2 : -2), y: e.y + e.h - 34, vx: dir * (4 + day * 0.3), spin: 0, type: pick(['purse','phone','glass']) });
     }
     if (e.insultTimer > 0 && --e.insultTimer === 0) e.insult = null;
 
+    // Stomp / touch collision with player
     if (overlap(player, e)) {
       if (player.vy > 0 && player.y + player.h - player.vy <= e.y + 10) {
         e.stomped = true; e.stompTimer = 28; player.vy = -9;
@@ -467,21 +526,21 @@ function updateBoss() {
   }
   if (boss.insultTimer > 0 && --boss.insultTimer === 0) boss.insult = null;
 
-  // Check player stomp on boss HEAD (top 30px)
+  // Check player stomp on boss HEAD (top 35px of boss sprite)
+  let bossStompedThisFrame = false;
   if (boss.invFrames === 0 && overlap(player, { x: boss.x, y: boss.y, w: boss.w, h: 35 })) {
     if (player.vy > 0 && player.y + player.h - player.vy <= boss.y + 30) {
       boss.hp--;
       boss.invFrames = 90;
-      player.vy = -12;
+      player.vy = -16;  // strong bounce
+      bossStompedThisFrame = true;
       const pts = 200; score += pts; dayScore += pts;
       if (boss.hp <= 0) { boss.defeated = true; boss.defeatTimer = 0; }
     }
   }
-  // Boss body collision (sides only)
-  if (overlap(player, boss)) {
-    if (!(player.vy > 0 && player.y + player.h - player.vy <= boss.y + 30)) {
-      takeDamage(TOUCH_DMG);
-    }
+  // Boss body collision — skip if we just stomped this frame (avoids same-frame damage)
+  if (!bossStompedThisFrame && overlap(player, boss)) {
+    takeDamage(TOUCH_DMG);
   }
 
   if (++boss.animT > 8) { boss.animT = 0; boss.animF = (boss.animF + 1) % 2; }
