@@ -1099,29 +1099,52 @@ function drawWin() {
   ctx.font='bold 28px monospace'; ctx.textAlign='center';
   ctx.strokeStyle='#884400'; ctx.lineWidth=2; ctx.strokeText('YOU SURVIVED THE WEEK!',W/2,44);
 
-  // Hug scene — Carly on left facing right, Tessa on right facing left (flipped)
-  const hugCY = 80; // center y for the hug scene
-  const carlyX = W/2 - 70;
-  const tessaX = W/2 + 24;
+  // ── Animated hug scene ──────────────────────────────────────────────
+  const now = Date.now();
+  const hugCY = 82;
 
-  // Draw Carly (facing right — normal)
-  drawPlayerAt(carlyX, hugCY, true, 0, false, 0);
-  // Draw Tessa (facing left — flip)
-  drawTessa(tessaX, hugCY - 4, true);
+  // Gentle squeeze pulse: Carly and Tessa lean 0–4px into each other
+  const squeeze = Math.sin(now / 680) * 2 + 2;
+  // Shared slow bob: both rock up/down together like a slow breath
+  const bob = Math.sin(now / 920) * 2.5;
 
-  // Draw overlapping arms (hug detail)
-  pixelRect(W/2 - 8, hugCY + 22, 18, 10, '#1a1a1a'); // Carly's right arm reaching
-  pixelRect(W/2 - 6, hugCY + 18, 16, 8, '#FDDBB4');  // skin over arm
+  // Soft radial glow centred on the embrace
+  const glowR = ctx.createRadialGradient(W/2, hugCY + 26, 6, W/2, hugCY + 26, 82);
+  glowR.addColorStop(0,   'rgba(255,140,200,0.32)');
+  glowR.addColorStop(0.45,'rgba(255,90,160,0.14)');
+  glowR.addColorStop(1,   'rgba(255,50,130,0)');
+  ctx.fillStyle = glowR;
+  ctx.beginPath(); ctx.arc(W/2, hugCY + 26, 82, 0, Math.PI*2); ctx.fill();
 
-  // Hearts floating above them
-  const hearts = ['♥','♡','♥','♡'];
-  hearts.forEach((h, i) => {
-    const hx = W/2 - 30 + i * 20;
-    const hy = hugCY - 16 + Math.sin(Date.now()/400 + i) * 5;
-    const sz = i%2===0 ? 16 : 12;
-    const col = i%2===0 ? '#FF69B4' : '#FF99CC';
-    drawText(h, hx, hy, sz, col);
-  });
+  // Characters
+  const carlyX = W/2 - 72 + squeeze;
+  const tessaX  = W/2 + 20 - squeeze;
+  drawPlayerAt(carlyX, hugCY + bob, true, 0, false, 0);
+  drawTessa(tessaX, hugCY + bob - 4, true);
+
+  // Overlapping hug arms drawn over both sprites
+  pixelRect(W/2 - 10, hugCY + bob + 21, 22, 11, '#1a1a1a');
+  pixelRect(W/2 - 8,  hugCY + bob + 17, 18, 9,  '#FDDBB4');
+
+  // ── Continuous heart fountain ──────────────────────────────────────
+  // 14 hearts at staggered phases so the stream looks full and organic.
+  const HC = ['#FF1493','#FF69B4','#FF99CC','#FF4466','#FF88EE','#FFB6C1','#FF6090'];
+  const HG = ['♥','♡','♥','♥','♡','♥','♡'];
+  const PERIOD = 2400; // ms per full cycle per heart
+  for (let h = 0; h < 14; h++) {
+    const phase = ((now + h * (PERIOD / 14)) % PERIOD) / PERIOD; // 0 → 1
+    // Organic left/right drift around centre
+    const drift = Math.sin(h * 1.9 + phase * Math.PI * 2.2) * 32;
+    const hx = W/2 + drift;
+    const hy = hugCY + 14 - phase * 100;          // float 100px upward
+    // Fade out in the top quarter of travel
+    const alpha = phase < 0.72 ? 1.0 : (1 - phase) / 0.28;
+    // Three size classes: small, medium, large
+    const sz = [8, 13, 18][h % 3];
+    ctx.globalAlpha = Math.max(0, alpha) * 0.88;
+    drawText(HG[h % 7], hx, hy, sz, HC[h % 7]);
+  }
+  ctx.globalAlpha = 1;
 
   drawText(`FINAL SCORE: ${score}`, W/2, hugCY + 78, 22, '#fff');
 
