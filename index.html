@@ -88,7 +88,21 @@ document.addEventListener('keyup', e => { keys[e.code] = false; });
 function onKeyDown(code) {
   const jump = code === 'Space' || code === 'KeyW' || code === 'ArrowUp';
   if (state === ST.TITLE    && (code === 'Space' || code === 'Enter')) { startGame(); return; }
-  if (state === ST.PLAY     && jump && player.onGround) { player.vy = JUMP_V; player.onGround = false; }
+  if (state === ST.PLAY && jump) {
+    player.jumpBuffer = 10; // arm the timed-bounce window
+    if (player.onGround) { player.vy = JUMP_V; player.onGround = false; }
+  }
+  if (state === ST.PLAY) {
+    const isRight = code === 'KeyD' || code === 'ArrowRight';
+    const isLeft  = code === 'KeyA' || code === 'ArrowLeft';
+    if (isRight || isLeft) {
+      const dir = isRight ? 1 : -1;
+      // Second tap in the same direction within the window → dash
+      if (player.dashTapTimer > 0 && player.dashDir === dir) player.dashing = true;
+      player.dashDir = dir;
+      player.dashTapTimer = 15; // frames to detect the second tap
+    }
+  }
   if (state === ST.COMPLETE && code === 'Space') { advanceDay(); return; }
   if (state === ST.GAMEOVER && code === 'Space') { state = ST.TITLE; return; }
   if (state === ST.WIN      && code === 'Space') { state = ST.TITLE; return; }
@@ -342,6 +356,10 @@ function mkPlayer() {
     vx: 0, vy: 0, onGround: false,
     health: HEALTH_MAX, invFrames: 0,
     facingR: true, animF: 0, animT: 0,
+    jumpBuffer: 0,     // frames since jump was pressed — used for timed bounce
+    dashTapTimer: 0,   // window to detect double-tap
+    dashDir: 0,        // direction of last tap: 1=right, -1=left
+    dashing: false,    // currently dashing
   };
 }
 
@@ -402,8 +420,19 @@ function applyPlatformCollision(entity) {
 
 function updatePlayer() {
   const p = player;
-  if (keys['KeyA'] || keys['ArrowLeft'])       { p.vx = -PLAYER_SPD; p.facingR = false; }
-  else if (keys['KeyD'] || keys['ArrowRight']) { p.vx = PLAYER_SPD;  p.facingR = true;  }
+
+  // Dash: stays active while the triggering direction key is held
+  if (p.dashing) {
+    const lHeld = keys['KeyA'] || keys['ArrowLeft'];
+    const rHeld = keys['KeyD'] || keys['ArrowRight'];
+    if ((p.dashDir === 1 && !rHeld) || (p.dashDir === -1 && !lHeld)) p.dashing = false;
+  }
+  if (p.dashTapTimer > 0) p.dashTapTimer--;
+  if (p.jumpBuffer  > 0) p.jumpBuffer--;
+
+  const spd = p.dashing ? PLAYER_SPD * 1.7 : PLAYER_SPD;
+  if (keys['KeyA'] || keys['ArrowLeft'])       { p.vx = -spd; p.facingR = false; }
+  else if (keys['KeyD'] || keys['ArrowRight']) { p.vx = spd;  p.facingR = true;  }
   else p.vx *= 0.7;
 
   p.vy += GRAVITY; p.x += p.vx; p.y += p.vy;
@@ -488,7 +517,10 @@ function updateEnemies() {
     // Stomp / touch collision with player
     if (overlap(player, e)) {
       if (player.vy > 0 && player.y + player.h - player.vy <= e.y + 10) {
-        e.stomped = true; e.stompTimer = 28; player.vy = -9;
+        e.stomped = true; e.stompTimer = 28;
+        // Timed bounce: jump pressed within 10 frames of landing → big bounce to reach high platforms
+        player.vy = player.jumpBuffer > 0 ? -16 : -9;
+        player.jumpBuffer = 0;
         const pts = 150; score += pts; dayScore += pts;
       } else { takeDamage(TOUCH_DMG); }
     }
@@ -775,6 +807,16 @@ function drawPlayer() {
   const p = player;
   const sx = p.x - camera;
   const moving = Math.abs(p.vx) > 0.5 && p.onGround;
+
+  // Dash trail: two faint ghost copies trailing behind Carly
+  if (p.dashing && Math.abs(p.vx) > 1) {
+    for (let t = 1; t <= 2; t++) {
+      ctx.globalAlpha = 0.18 / t;
+      drawPlayerAt(sx - p.vx * t * 2.2, p.y, p.facingR, p.animF, moving, 0);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   drawPlayerAt(sx, p.y, p.facingR, p.animF, moving, p.invFrames);
 }
 
@@ -986,10 +1028,11 @@ function drawTitle() {
   const tips = [
     ['MOVE','A / D  or  ← →'],
     ['JUMP','SPACE  or  W  or  ↑'],
-    ['DEFEAT','Jump on Mean Ladies (+150 pts)'],
+    ['DASH','Double-tap + hold ← or → to dash'],
+    ['BOUNCE','Press JUMP as you land on a lady'],
+    ['DEFEAT','Stomp Mean Ladies (+150 pts)'],
     ['WINE 🍷','+10 pts — mostly on platforms!'],
     ['REESES 🍫','+25 pts & +30 HP — very rare'],
-    ['DANGER','Jump over thrown objects!'],
     ['SUNDAY','Defeat Mega Karen to win!'],
   ];
   tips.forEach(([k,v],i) => {
